@@ -1,4 +1,4 @@
-import httpx
+import httpx, base64
 from app.config import settings
 from app.schemas.github import PullRequestData, PullRequestFile
 
@@ -50,3 +50,91 @@ class GitHubClient:
             page += 1
 
         return files
+
+    # Read a file from a specific branch or commit
+    async def download_archive(self, owner: str, repository: str, ref: str) -> bytes:
+        """Download a bounded snapshot at the revision injected by the graph."""
+        url = f"{self.BASE_URL}/repos/{owner}/{repository}/zipball/{ref}"
+        content = bytearray()
+        async with httpx.AsyncClient(headers=self._headers(), timeout=30.0,
+                                     follow_redirects=True) as client:
+            async with client.stream("GET", url) as response:
+                response.raise_for_status()
+                async for chunk in response.aiter_bytes():
+                    content.extend(chunk)
+                    if len(content) > 25 * 1024 * 1024:
+                        raise ValueError("Repository archive exceeds 25 MiB.")
+        return bytes(content)
+
+    async def read_file(
+        self,
+        owner: str,
+        repository: str,
+        path: str,
+        ref: str,
+    ) -> str:
+        url = f"{self.BASE_URL}/repos/{owner}/{repository}/contents/{path}"
+
+        async with httpx.AsyncClient(
+            headers=self._headers(),
+            timeout=30.0,
+        ) as client:
+            res = await client.get(
+                url,
+                params={"ref": ref},
+            )
+            res.raise_for_status()
+
+        data = res.json()
+
+        # GitHub returns file content as Base64
+        return base64.b64decode(
+            data["content"]
+        ).decode("utf-8")
+
+
+    # Search the repository for code or a symbol
+    async def search_code(
+        self,
+        owner: str,
+        repository: str,
+        query: str,
+    ) -> list[dict]:
+        url = f"{self.BASE_URL}/search/code"
+
+        async with httpx.AsyncClient(
+            headers=self._headers(),
+            timeout=30.0,
+        ) as client:
+            res = await client.get(
+                url,
+                params={
+                    "q": f"{query} repo:{owner}/{repository}",
+                    "per_page": 10,
+                },
+            )
+            res.raise_for_status()
+
+        data = res.json()
+
+        return [
+            {
+                "name": item["name"],
+                "path": item["path"],
+            }
+            for item in data.get("items", [])
+        ]
+
+
+    # Find usages/references of a symbol
+    async def find_references(
+        self,
+        owner: str,
+        repository: str,
+        symbol: str,
+    ) -> list[dict]:
+        return await self.search_code(
+            owner=owner,
+            repository=repository,
+            query=symbol,
+        )
