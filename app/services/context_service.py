@@ -3,6 +3,7 @@ from openai import AsyncOpenAI
 from app.config import settings
 from app.schemas.context import ContextRequest
 from app.schemas.github import PullRequestData
+from app.services.llm_review_service import LLMReviewService, bounded_description
 
 
 class ContextService:
@@ -16,15 +17,7 @@ class ContextService:
         pull_request: PullRequestData,
     ) -> ContextRequest:
 
-        changed_files = "\n\n".join(
-            f"""
-File: {file.filename}
-
-Patch:
-{file.patch}
-"""
-            for file in pull_request.files
-        )
+        changed_files = LLMReviewService._build_diff(pull_request)
 
         prompt = f"""
 You are analysing a GitHub pull request before performing a code review.
@@ -50,7 +43,7 @@ Title:
 {pull_request.title}
 
 Description:
-{pull_request.body}
+{bounded_description(pull_request.body)}
 
 Changes:
 {changed_files}
