@@ -1,0 +1,516 @@
+[
+  {
+    "id": "empty-average",
+    "title": "Simplify mean calculation",
+    "base": {
+      "subject.py": "def mean(values):\n    return sum(values) / len(values) if values else 0\n"
+    },
+    "head": {
+      "subject.py": "def mean(values):\n    return sum(values) / len(values)\n"
+    },
+    "expected_bugs": [
+      {
+        "id": "empty-average-bug",
+        "file": "subject.py",
+        "start_line": 1,
+        "end_line": 2,
+        "trigger": "mean([])",
+        "consequence": "An empty list raises ZeroDivisionError instead of returning 0."
+      }
+    ]
+  },
+  {
+    "id": "inclusive-limit",
+    "title": "Adjust capacity comparison",
+    "base": {
+      "subject.py": "def allowed(count, limit):\n    \"\"\"Return whether a new request fits below the maximum admitted count.\"\"\"\n    return count < limit\n"
+    },
+    "head": {
+      "subject.py": "def allowed(count, limit):\n    \"\"\"Return whether a new request fits below the maximum admitted count.\"\"\"\n    return count <= limit\n"
+    },
+    "expected_bugs": [
+      {
+        "id": "inclusive-limit-bug",
+        "file": "subject.py",
+        "start_line": 1,
+        "end_line": 3,
+        "trigger": "allowed(10, 10), where limit is the maximum number already admitted",
+        "consequence": "One extra request is admitted at full capacity."
+      }
+    ]
+  },
+  {
+    "id": "missing-return",
+    "title": "Update price transformation",
+    "base": {
+      "subject.py": "def price(cents):\n    return cents / 100\n"
+    },
+    "head": {
+      "subject.py": "def price(cents):\n    cents / 100\n"
+    },
+    "expected_bugs": [
+      {
+        "id": "missing-return-bug",
+        "file": "subject.py",
+        "start_line": 1,
+        "end_line": 2,
+        "trigger": "price(150)",
+        "consequence": "The function returns None instead of 1.5."
+      }
+    ]
+  },
+  {
+    "id": "mutable-default",
+    "title": "Make event collection optional",
+    "base": {
+      "subject.py": "def record(event, events=None):\n    if events is None:\n        events = []\n    events.append(event)\n    return events\n"
+    },
+    "head": {
+      "subject.py": "def record(event, events=[]):\n    events.append(event)\n    return events\n"
+    },
+    "expected_bugs": [
+      {
+        "id": "mutable-default-bug",
+        "file": "subject.py",
+        "start_line": 1,
+        "end_line": 3,
+        "trigger": "record(\"a\") followed by record(\"b\")",
+        "consequence": "Independent calls share the same list and leak prior events."
+      }
+    ]
+  },
+  {
+    "id": "zero-default",
+    "title": "Simplify retry fallback",
+    "base": {
+      "subject.py": "def retries(value):\n    \"\"\"None uses the default; zero explicitly disables retries.\"\"\"\n    return 3 if value is None else value\n"
+    },
+    "head": {
+      "subject.py": "def retries(value):\n    \"\"\"None uses the default; zero explicitly disables retries.\"\"\"\n    return value or 3\n"
+    },
+    "expected_bugs": [
+      {
+        "id": "zero-default-bug",
+        "file": "subject.py",
+        "start_line": 1,
+        "end_line": 3,
+        "trigger": "retries(0), where 0 explicitly disables retries",
+        "consequence": "Retries are enabled even though the caller disabled them."
+      }
+    ]
+  },
+  {
+    "id": "last-element",
+    "title": "Streamline final item lookup",
+    "base": {
+      "subject.py": "def last(items):\n    return items[-1]\n"
+    },
+    "head": {
+      "subject.py": "def last(items):\n    return items[len(items)]\n"
+    },
+    "expected_bugs": [
+      {
+        "id": "last-element-bug",
+        "file": "subject.py",
+        "start_line": 1,
+        "end_line": 2,
+        "trigger": "last([1])",
+        "consequence": "Every nonempty list raises IndexError."
+      }
+    ]
+  },
+  {
+    "id": "descending-order",
+    "title": "Update ranking order",
+    "base": {
+      "subject.py": "def best(scores):\n    \"\"\"Return the highest score; larger scores rank better.\"\"\"\n    return sorted(scores, reverse=True)[0]\n"
+    },
+    "head": {
+      "subject.py": "def best(scores):\n    \"\"\"Return the highest score; larger scores rank better.\"\"\"\n    return sorted(scores)[0]\n"
+    },
+    "expected_bugs": [
+      {
+        "id": "descending-order-bug",
+        "file": "subject.py",
+        "start_line": 1,
+        "end_line": 3,
+        "trigger": "best([10, 90]), where larger scores are better",
+        "consequence": "The lowest score wins rather than the highest."
+      }
+    ]
+  },
+  {
+    "id": "missing-key",
+    "title": "Simplify account label",
+    "base": {
+      "subject.py": "def label(account):\n    return account.get(\"name\", \"anonymous\")\n"
+    },
+    "head": {
+      "subject.py": "def label(account):\n    return account[\"name\"]\n"
+    },
+    "expected_bugs": [
+      {
+        "id": "missing-key-bug",
+        "file": "subject.py",
+        "start_line": 1,
+        "end_line": 2,
+        "trigger": "label({})",
+        "consequence": "An account without the optional name raises KeyError."
+      }
+    ]
+  },
+  {
+    "id": "iterator-consumption",
+    "title": "Count work before processing",
+    "base": {
+      "subject.py": "def process(items):\n    return [item * 2 for item in items]\n"
+    },
+    "head": {
+      "subject.py": "def process(items):\n    count = len(list(items))\n    return [item * 2 for item in items]\n"
+    },
+    "expected_bugs": [
+      {
+        "id": "iterator-consumption-bug",
+        "file": "subject.py",
+        "start_line": 1,
+        "end_line": 3,
+        "trigger": "process(iter([1, 2]))",
+        "consequence": "Counting exhausts the iterator, so no items are processed."
+      }
+    ]
+  },
+  {
+    "id": "mutation-iteration",
+    "title": "Remove inactive records in place",
+    "base": {
+      "subject.py": "def active(items):\n    return [item for item in items if item[\"active\"]]\n"
+    },
+    "head": {
+      "subject.py": "def active(items):\n    for item in items:\n        if not item[\"active\"]:\n            items.remove(item)\n    return items\n"
+    },
+    "expected_bugs": [
+      {
+        "id": "mutation-iteration-bug",
+        "file": "subject.py",
+        "start_line": 1,
+        "end_line": 5,
+        "trigger": "active([{\"active\": False, \"id\": 1}, {\"active\": False, \"id\": 2}])",
+        "consequence": "Removing during iteration skips the second inactive record."
+      }
+    ]
+  },
+  {
+    "id": "discount-units",
+    "title": "Express discounted price directly",
+    "base": {
+      "subject.py": "def discounted(price, percent):\n    \"\"\"percent is a discount percentage in the range 0 to 100.\"\"\"\n    return price * (1 - percent / 100)\n"
+    },
+    "head": {
+      "subject.py": "def discounted(price, percent):\n    \"\"\"percent is a discount percentage in the range 0 to 100.\"\"\"\n    return price * (1 - percent)\n"
+    },
+    "expected_bugs": [
+      {
+        "id": "discount-units-bug",
+        "file": "subject.py",
+        "start_line": 1,
+        "end_line": 3,
+        "trigger": "discounted(100, 20)",
+        "consequence": "The price becomes -1900 instead of 80."
+      }
+    ]
+  },
+  {
+    "id": "ceiling-pages",
+    "title": "Simplify page count",
+    "base": {
+      "subject.py": "def pages(total, size):\n    return (total + size - 1) // size\n"
+    },
+    "head": {
+      "subject.py": "def pages(total, size):\n    return total // size\n"
+    },
+    "expected_bugs": [
+      {
+        "id": "ceiling-pages-bug",
+        "file": "subject.py",
+        "start_line": 1,
+        "end_line": 2,
+        "trigger": "pages(11, 10)",
+        "consequence": "The final partial page is omitted."
+      }
+    ]
+  },
+  {
+    "id": "boolean-access",
+    "title": "Simplify permission decision",
+    "base": {
+      "subject.py": "def permitted(authenticated, admin):\n    \"\"\"Only an authenticated administrator may perform this action.\"\"\"\n    return authenticated and admin\n"
+    },
+    "head": {
+      "subject.py": "def permitted(authenticated, admin):\n    \"\"\"Only an authenticated administrator may perform this action.\"\"\"\n    return authenticated or admin\n"
+    },
+    "expected_bugs": [
+      {
+        "id": "boolean-access-bug",
+        "file": "subject.py",
+        "start_line": 1,
+        "end_line": 3,
+        "trigger": "permitted(True, False), where this action is admin-only",
+        "consequence": "An authenticated non-admin is allowed to perform the admin action."
+      }
+    ]
+  },
+  {
+    "id": "timeout-units",
+    "title": "Convert request timeout",
+    "base": {
+      "subject.py": "def seconds(milliseconds):\n    return milliseconds / 1000\n"
+    },
+    "head": {
+      "subject.py": "def seconds(milliseconds):\n    return milliseconds * 1000\n"
+    },
+    "expected_bugs": [
+      {
+        "id": "timeout-units-bug",
+        "file": "subject.py",
+        "start_line": 1,
+        "end_line": 2,
+        "trigger": "seconds(500), where input is milliseconds",
+        "consequence": "A half-second timeout becomes 500000 seconds."
+      }
+    ]
+  },
+  {
+    "id": "string-replace",
+    "title": "Normalize identifiers in place",
+    "base": {
+      "subject.py": "def normalize(value):\n    return value.replace(\"-\", \"_\")\n"
+    },
+    "head": {
+      "subject.py": "def normalize(value):\n    value.replace(\"-\", \"_\")\n    return value\n"
+    },
+    "expected_bugs": [
+      {
+        "id": "string-replace-bug",
+        "file": "subject.py",
+        "start_line": 1,
+        "end_line": 3,
+        "trigger": "normalize(\"a-b\")",
+        "consequence": "The immutable string stays unchanged."
+      }
+    ]
+  },
+  {
+    "id": "zero-filter",
+    "title": "Simplify missing-value filtering",
+    "base": {
+      "subject.py": "def present(values):\n    \"\"\"Drop missing None measurements while retaining numeric zero.\"\"\"\n    return [value for value in values if value is not None]\n"
+    },
+    "head": {
+      "subject.py": "def present(values):\n    \"\"\"Drop missing None measurements while retaining numeric zero.\"\"\"\n    return [value for value in values if value]\n"
+    },
+    "expected_bugs": [
+      {
+        "id": "zero-filter-bug",
+        "file": "subject.py",
+        "start_line": 1,
+        "end_line": 3,
+        "trigger": "present([0, None, 1]), where 0 is a valid measurement",
+        "consequence": "The valid zero measurement is dropped."
+      }
+    ]
+  },
+  {
+    "id": "negative-balance",
+    "title": "Adjust withdrawal validation",
+    "base": {
+      "subject.py": "def withdraw(balance, amount):\n    if amount < 0 or amount > balance:\n        raise ValueError(\"invalid amount\")\n    return balance - amount\n"
+    },
+    "head": {
+      "subject.py": "def withdraw(balance, amount):\n    if amount > balance:\n        raise ValueError(\"invalid amount\")\n    return balance - amount\n"
+    },
+    "expected_bugs": [
+      {
+        "id": "negative-balance-bug",
+        "file": "subject.py",
+        "start_line": 1,
+        "end_line": 4,
+        "trigger": "withdraw(100, -10)",
+        "consequence": "A negative withdrawal increases the balance."
+      }
+    ]
+  },
+  {
+    "id": "list-sort-return",
+    "title": "Use in-place sorting",
+    "base": {
+      "subject.py": "def ordered(values):\n    return sorted(values)\n"
+    },
+    "head": {
+      "subject.py": "def ordered(values):\n    return values.sort()\n"
+    },
+    "expected_bugs": [
+      {
+        "id": "list-sort-return-bug",
+        "file": "subject.py",
+        "start_line": 1,
+        "end_line": 2,
+        "trigger": "ordered([2, 1])",
+        "consequence": "The API returns None instead of a sorted list."
+      }
+    ]
+  },
+  {
+    "id": "caller-contract",
+    "title": "Simplify missing customer lookup",
+    "base": {
+      "subject.py": "def lookup(customers, key):\n    return customers.get(key, {\"name\": \"anonymous\"})\n",
+      "caller.py": "from subject import lookup\n\ndef customer_name(customers, key):\n    return lookup(customers, key)[\"name\"]\n"
+    },
+    "head": {
+      "subject.py": "def lookup(customers, key):\n    return customers.get(key)\n",
+      "caller.py": "from subject import lookup\n\ndef customer_name(customers, key):\n    return lookup(customers, key)[\"name\"]\n"
+    },
+    "expected_bugs": [
+      {
+        "id": "caller-contract-bug",
+        "file": "subject.py",
+        "start_line": 1,
+        "end_line": 2,
+        "trigger": "customer_name({}, \"missing\") in caller.py",
+        "consequence": "The caller subscripts None, raising TypeError."
+      }
+    ]
+  },
+  {
+    "id": "shared-constant",
+    "title": "Adjust expiry calculation",
+    "base": {
+      "subject.py": "from config import SESSION_TTL_SECONDS\n\ndef expired(age_seconds):\n    return age_seconds >= SESSION_TTL_SECONDS\n",
+      "config.py": "SESSION_TTL_SECONDS = 60\n"
+    },
+    "head": {
+      "subject.py": "from config import SESSION_TTL_SECONDS\n\ndef expired(age_seconds):\n    return age_seconds >= SESSION_TTL_SECONDS * 1000\n",
+      "config.py": "SESSION_TTL_SECONDS = 60\n"
+    },
+    "expected_bugs": [
+      {
+        "id": "shared-constant-bug",
+        "file": "subject.py",
+        "start_line": 1,
+        "end_line": 4,
+        "trigger": "expired(120), where config.py defines SESSION_TTL_SECONDS = 60",
+        "consequence": "An expired session remains valid for far longer than 60 seconds."
+      }
+    ]
+  },
+  {
+    "id": "rename-local",
+    "title": "Rename local sum",
+    "base": {
+      "subject.py": "def add(a, b):\n    result = a + b\n    return result\n"
+    },
+    "head": {
+      "subject.py": "def add(a, b):\n    total = a + b\n    return total\n"
+    },
+    "expected_bugs": []
+  },
+  {
+    "id": "add-docstring",
+    "title": "Document addition",
+    "base": {
+      "subject.py": "def add(a, b):\n    return a + b\n"
+    },
+    "head": {
+      "subject.py": "def add(a, b):\n    \"\"\"Return the sum of two values.\"\"\"\n    return a + b\n"
+    },
+    "expected_bugs": []
+  },
+  {
+    "id": "equivalent-condition",
+    "title": "Make guard explicit",
+    "base": {
+      "subject.py": "def valid(value):\n    return not (value is None)\n"
+    },
+    "head": {
+      "subject.py": "def valid(value):\n    return value is not None\n"
+    },
+    "expected_bugs": []
+  },
+  {
+    "id": "retain-zero",
+    "title": "Clarify optional retry fallback",
+    "base": {
+      "subject.py": "def retries(value):\n    if value is None:\n        return 3\n    return value\n"
+    },
+    "head": {
+      "subject.py": "def retries(value):\n    return 3 if value is None else value\n"
+    },
+    "expected_bugs": []
+  },
+  {
+    "id": "list-copy",
+    "title": "Use copy method",
+    "base": {
+      "subject.py": "def copy(items):\n    \"\"\"Return a shallow copy of the supplied list.\"\"\"\n    return items[:]\n"
+    },
+    "head": {
+      "subject.py": "def copy(items):\n    \"\"\"Return a shallow copy of the supplied list.\"\"\"\n    return items.copy()\n"
+    },
+    "expected_bugs": []
+  },
+  {
+    "id": "reverse-iterate",
+    "title": "Avoid reverse slice",
+    "base": {
+      "subject.py": "def backward(items):\n    \"\"\"Return the supplied list elements in reverse order.\"\"\"\n    return list(items[::-1])\n"
+    },
+    "head": {
+      "subject.py": "def backward(items):\n    \"\"\"Return the supplied list elements in reverse order.\"\"\"\n    return list(reversed(items))\n"
+    },
+    "expected_bugs": []
+  },
+  {
+    "id": "explicit-default",
+    "title": "Simplify optional label",
+    "base": {
+      "subject.py": "def label(account):\n    if \"name\" in account:\n        return account[\"name\"]\n    return \"anonymous\"\n"
+    },
+    "head": {
+      "subject.py": "def label(account):\n    return account.get(\"name\", \"anonymous\")\n"
+    },
+    "expected_bugs": []
+  },
+  {
+    "id": "comment-change",
+    "title": "Explain price units",
+    "base": {
+      "subject.py": "def price(cents):\n    return cents / 100\n"
+    },
+    "head": {
+      "subject.py": "def price(cents):\n    # Prices arrive in cents.\n    return cents / 100\n"
+    },
+    "expected_bugs": []
+  },
+  {
+    "id": "safe-empty",
+    "title": "Handle empty lists explicitly",
+    "base": {
+      "subject.py": "def mean(values):\n    return sum(values) / len(values) if values else 0\n"
+    },
+    "head": {
+      "subject.py": "def mean(values):\n    if not values:\n        return 0\n    return sum(values) / len(values)\n"
+    },
+    "expected_bugs": []
+  },
+  {
+    "id": "format-expression",
+    "title": "Format addition expression",
+    "base": {
+      "subject.py": "def add(a, b):\n    return a+b\n"
+    },
+    "head": {
+      "subject.py": "def add(a, b):\n    return a + b\n"
+    },
+    "expected_bugs": []
+  }
+]
