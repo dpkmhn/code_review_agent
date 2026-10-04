@@ -68,8 +68,8 @@ class LLMReviewService:
             self.usage_observer(response)
 
     async def request_verification_tools(self, messages, tools) -> AIMessage:
-        """Bridge OpenAI tool calls to the messages consumed by LangGraph ToolNode."""
-        conversation = [{"role": "system", "content": SYSTEM_PROMPT + """
+        """Bridge Responses API function calls to the messages consumed by LangGraph ToolNode."""
+        instructions = SYSTEM_PROMPT + """
 Investigate the current hypothesis using the available repository tools. The
 verification plan is a starting point; use tool results to decide the next step.
 Read at head or base explicitly. Search results only locate candidate paths on
@@ -81,40 +81,54 @@ command completed with test failures or lint findings, not proof of this hypothe
 Disabled, unavailable, timed-out, or incomplete executions cannot confirm a bug.
 When enough context is available, respond without tool calls; a separate
 evidence evaluator will decide whether the hypothesis is confirmed.
-"""}]
+"""
+        conversation = []
         for message in messages:
             if isinstance(message, HumanMessage):
                 conversation.append({"role": "user", "content": message.content})
             elif isinstance(message, AIMessage):
-                item = {"role": "assistant", "content": message.content or None}
-                if message.tool_calls:
-                    item["tool_calls"] = [{
-                        "id": call["id"], "type": "function",
-                        "function": {"name": call["name"], "arguments": json.dumps(call["args"])},
-                    } for call in message.tool_calls]
-                conversation.append(item)
+                # Reasoning items must precede the function calls they produced.
+                conversation.extend(message.additional_kwargs.get("reasoning_items", []))
+                if message.content:
+                    conversation.append({"role": "assistant", "content": message.content})
+                conversation.extend({
+                    "type": "function_call", "call_id": call["id"],
+                    "name": call["name"], "arguments": json.dumps(call["args"]),
+                } for call in message.tool_calls)
             elif isinstance(message, ToolMessage):
-                conversation.append({"role": "tool", "tool_call_id": message.tool_call_id,
-                                     "content": message.content})
-        response = await self.client.chat.completions.create(
-            model="gpt-6-luna", messages=conversation,
-            # GPT-6 Luna requires reasoning disabled for Chat Completions tools.
-            reasoning_effort="none",
-            tools=[convert_to_openai_tool(tool) for tool in tools],
+                conversation.append({"type": "function_call_output",
+                                     "call_id": message.tool_call_id, "output": message.content})
+        effort = settings.verification_reasoning_effort
+        # Chat Completions rejects function tools with reasoning on GPT-6 Luna;
+        # the Responses API supports both.
+        options = {} if effort == "none" else {
+            # Stateless replay: carry encrypted reasoning between tool rounds.
+            "store": False, "include": ["reasoning.encrypted_content"],
+        }
+        response = await self.client.responses.create(
+            model="gpt-6-luna", instructions=instructions, input=conversation,
+            reasoning={"effort": effort},
+            tools=[{"type": "function", **convert_to_openai_tool(tool)["function"]} for tool in tools],
+            **options,
         )
         self._record_usage(response)
-        message = response.choices[0].message
         calls = []
-        for call in message.tool_calls or []:
+        reasoning_items = []
+        for item in response.output:
+            if item.type == "reasoning":
+                reasoning_items.append(item.model_dump(exclude_none=True))
+            if item.type != "function_call":
+                continue
             try:
-                arguments = json.loads(call.function.arguments)
+                arguments = json.loads(item.arguments)
                 if not isinstance(arguments, dict):
                     raise ValueError("Expected an object")
             except (ValueError, TypeError):
                 # ToolNode will report a schema error without executing this request.
-                arguments = {"_invalid_arguments": call.function.arguments}
-            calls.append({"id": call.id, "name": call.function.name, "args": arguments})
-        return AIMessage(content=message.content or "", tool_calls=calls)
+                arguments = {"_invalid_arguments": item.arguments}
+            calls.append({"id": item.call_id, "name": item.name, "args": arguments})
+        extra = {"reasoning_items": reasoning_items} if reasoning_items and calls else {}
+        return AIMessage(content=response.output_text or "", tool_calls=calls, additional_kwargs=extra)
 
     async def form_hypotheses(
         self,

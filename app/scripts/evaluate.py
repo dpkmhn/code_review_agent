@@ -24,6 +24,8 @@ def main():
                         default=["diff_only", "context", "verification"])
     parser.add_argument("--case", action="append", help="Restrict to a case ID (repeatable)")
     parser.add_argument("--limit", type=int)
+    parser.add_argument("--verification-reasoning", choices=["none", "low", "medium", "high"],
+                        help="Override verification_reasoning_effort for the tool-calling reviewer")
     parser.add_argument("--input-rate", type=float, help="USD per million uncached input tokens")
     parser.add_argument("--cached-input-rate", type=float, help="USD per million cached input tokens")
     parser.add_argument("--output-rate", type=float, help="USD per million output tokens")
@@ -58,7 +60,11 @@ def main():
         if not args.live:
             os.environ.setdefault("github_token", "offline-unused")
             os.environ.setdefault("openai_api_key", "offline-unused")
+        from app.config import settings
         from app.evaluation.runner import run_suite
+
+        if args.verification_reasoning:
+            settings.verification_reasoning_effort = args.verification_reasoning
 
         def progress(run):
             print(f"{run['case_id']} / {run['mode']}: {run['status']}", flush=True)
@@ -69,6 +75,7 @@ def main():
             "schema_version": 1, "created_at": datetime.now(timezone.utc).isoformat(),
             "run_kind": "live" if args.live else "offline_wiring_check",
             "model": "gpt-6-luna" if args.live else None, "dataset_sha256": digest,
+            "verification_reasoning_effort": settings.verification_reasoning_effort,
             "case_ids": [case.id for case in cases], "rates_usd_per_million": rates,
             "repository_search": "literal case-insensitive search on base snapshot",
             "sandbox_execution": False, "runs": runs, "summary": summarize(cases, runs, labels),

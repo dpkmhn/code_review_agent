@@ -101,6 +101,17 @@ inspection tools; sandbox execution is excluded. See the
 [evaluation guide](evaluation/README.md) for live runs, scoring, metric definitions,
 and dataset limitations. Model quality has not yet been measured on this dataset.
 
+The tool-calling reviewer uses the Responses API, because Chat Completions
+rejects function tools with reasoning on GPT-6 Luna. Its reasoning level is set
+by `verification_reasoning_effort` in `.env` (`none`, `low`, `medium`, or
+`high`; default `none`). Compare levels on the verification graph before
+changing the default; each report records the level used:
+
+```powershell
+uv run python -m app.scripts.evaluate --live --modes verification --verification-reasoning none --output evaluation/results/reasoning-none.json
+uv run python -m app.scripts.evaluate --live --modes verification --verification-reasoning medium --output evaluation/results/reasoning-medium.json
+```
+
 ## Stage 10: Persistence and checkpointing
 
 Optional PostgreSQL storage now saves review runs, verified findings, repository

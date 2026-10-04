@@ -8,6 +8,9 @@ from urllib.parse import urlsplit
 class Settings(BaseSettings):
     github_token: str
     openai_api_key: str
+    # Reasoning for the tool-calling reviewer step. "none" matches the original
+    # Chat Completions behavior; compare levels with the evaluation harness.
+    verification_reasoning_effort: Literal["none", "low", "medium", "high"] = "none"
     sandbox_enabled: bool = False
     sandbox_image: str = "code-review-sandbox:stage9"
     database_url: SecretStr | None = None
