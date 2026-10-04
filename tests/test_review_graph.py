@@ -47,7 +47,8 @@ class ReviewGraphTests(unittest.IsolatedAsyncioTestCase):
             ) if status == "confirmed" else None,
         )
 
-    async def invoke(self, hypotheses=(), evaluations=(), context=None, read=None, reviewer=None):
+    async def invoke(self, hypotheses=(), evaluations=(), context=None, read=None, reviewer=None,
+                     search=None):
         with ExitStack() as stack:
             self.context_mock = stack.enter_context(patch.object(
                 nodes.context_service, "analyse_context_need", AsyncMock(return_value=context or
@@ -64,7 +65,7 @@ class ReviewGraphTests(unittest.IsolatedAsyncioTestCase):
                 nodes.github_client, "read_file", read or AsyncMock(return_value="return value"),
             ))
             self.search_mock = stack.enter_context(patch.object(
-                nodes.github_client, "search_code", AsyncMock(return_value=[{"path": "caller.py"}]),
+                nodes.github_client, "search_code", search or AsyncMock(return_value=[{"path": "caller.py"}]),
             ))
             self.baseline_mock = stack.enter_context(patch.object(
                 nodes.review_service, "review_pull_request", AsyncMock(),
@@ -104,6 +105,21 @@ class ReviewGraphTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([record.name for record in result["tool_records"]], ["search_code", "read_file"])
         self.assertEqual(result["tool_records"][1].evidence.ref, "head")
 
+    async def test_failed_context_search_is_recorded_and_review_continues(self):
+        request = httpx.Request("GET", "https://api.github.com/search/code")
+        rate_limited = httpx.HTTPStatusError("rate limited", request=request,
+                                             response=httpx.Response(403, request=request))
+        result = await self.invoke(context=ContextRequest(
+            needs_context=True, reason="Check callers", queries=["helper", "caller"],
+        ), search=AsyncMock(side_effect=[rate_limited, [{"path": "caller.py"}]]))
+        self.assertEqual(result["review"].findings, [])
+        self.assertEqual([record.name for record in result["tool_records"]],
+                         ["search_code", "search_code", "read_file"])
+        self.assertIn("Search failed", result["tool_records"][0].result)
+        self.assertIn("not evidence", result["relevant_context"][0])
+        self.assertEqual(result["tool_calls"], 3)
+        self.hypotheses_mock.assert_awaited_once()
+
     async def test_confirmed_finding_uses_head_and_base_evidence(self):
         result = await self.invoke([self.hypothesis()], [self.evaluation()])
         self.assertEqual(len(result["review"].findings), 1)
@@ -139,11 +155,14 @@ class ReviewGraphTests(unittest.IsolatedAsyncioTestCase):
     async def test_failed_inspection_cannot_support_confirmation(self):
         error = httpx.HTTPStatusError("Missing", request=httpx.Request("GET", "https://example.test"),
                                     response=httpx.Response(404))
-        result = await self.invoke([self.hypothesis()], [self.evaluation(indices=[1])],
-                                   read=AsyncMock(side_effect=error))
-        self.assertFalse(result["evidence"][1].succeeded)
-        self.assertEqual(result["evaluations"][0].status, "inconclusive")
-        self.assertEqual(result["review"].findings, [])
+        # A directory or oversized file raises ValueError from GitHubClient.read_file.
+        for failure in (error, ValueError("Path is not a regular file.")):
+            with self.subTest(failure=type(failure).__name__):
+                result = await self.invoke([self.hypothesis()], [self.evaluation(indices=[1])],
+                                           read=AsyncMock(side_effect=failure))
+                self.assertFalse(result["evidence"][1].succeeded)
+                self.assertEqual(result["evaluations"][0].status, "inconclusive")
+                self.assertEqual(result["review"].findings, [])
 
     async def test_incomplete_sandbox_execution_cannot_support_confirmation(self):
         reviewer = AsyncMock(side_effect=[AIMessage(content="", tool_calls=[{

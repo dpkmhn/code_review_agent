@@ -1,10 +1,16 @@
 import httpx, base64
+from urllib.parse import quote
 from app.config import settings
 from app.schemas.github import PullRequestData, PullRequestFile
 
 class GitHubClient:
     BASE_URL = "https://api.github.com"
-    
+    RAW_FILE_LIMIT = 5 * 1024 * 1024
+
+    def __init__(self, transport: httpx.AsyncBaseTransport | None = None):
+        # Tests inject httpx.MockTransport; production uses the default transport.
+        self._transport = transport
+
     # Build authenticated GitHub API headers
     def _headers(self) -> dict[str, str]:
         headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2026-03-10"}
@@ -16,7 +22,7 @@ class GitHubClient:
     async def get_pull_request(self, owner: str, repository: str, pull_number: int) -> PullRequestData:
         url = f"{self.BASE_URL}/repos/{owner}/{repository}/pulls/{pull_number}"
         
-        async with httpx.AsyncClient(headers=self._headers(), timeout=30.0) as client:
+        async with httpx.AsyncClient(headers=self._headers(), timeout=30.0, transport=self._transport) as client:
             res = await client.get(url)
             res.raise_for_status()
             pr = res.json()
@@ -57,7 +63,7 @@ class GitHubClient:
         url = f"{self.BASE_URL}/repos/{owner}/{repository}/zipball/{ref}"
         content = bytearray()
         async with httpx.AsyncClient(headers=self._headers(), timeout=30.0,
-                                     follow_redirects=True) as client:
+                                     follow_redirects=True, transport=self._transport) as client:
             async with client.stream("GET", url) as response:
                 response.raise_for_status()
                 async for chunk in response.aiter_bytes():
@@ -73,24 +79,42 @@ class GitHubClient:
         path: str,
         ref: str,
     ) -> str:
-        url = f"{self.BASE_URL}/repos/{owner}/{repository}/contents/{path}"
+        # Keep separators but encode '#', '?', and spaces so the path is not truncated.
+        url = f"{self.BASE_URL}/repos/{owner}/{repository}/contents/{quote(path, safe='/')}"
 
         async with httpx.AsyncClient(
             headers=self._headers(),
             timeout=30.0,
+            transport=self._transport,
         ) as client:
             res = await client.get(
                 url,
                 params={"ref": ref},
             )
             res.raise_for_status()
+            data = res.json()
 
-        data = res.json()
+            # Directories return a list; symlinks and submodules have no file content.
+            if not isinstance(data, dict) or data.get("type") != "file":
+                raise ValueError("Path is not a regular file.")
 
-        # GitHub returns file content as Base64
-        return base64.b64decode(
-            data["content"]
-        ).decode("utf-8")
+            # GitHub returns file content as Base64
+            if data.get("encoding") == "base64":
+                return base64.b64decode(data["content"]).decode("utf-8")
+
+            # Files over 1 MB report encoding "none" with empty content. Reading
+            # that as "" would look like a successful inspection of an empty file.
+            content = bytearray()
+            async with client.stream(
+                "GET", url, params={"ref": ref},
+                headers={"Accept": "application/vnd.github.raw+json"},
+            ) as raw:
+                raw.raise_for_status()
+                async for chunk in raw.aiter_bytes():
+                    content.extend(chunk)
+                    if len(content) > self.RAW_FILE_LIMIT:
+                        raise ValueError("File exceeds the inspection limit.")
+        return content.decode("utf-8")
 
 
     # Search the repository for code or a symbol
@@ -105,6 +129,7 @@ class GitHubClient:
         async with httpx.AsyncClient(
             headers=self._headers(),
             timeout=30.0,
+            transport=self._transport,
         ) as client:
             res = await client.get(
                 url,

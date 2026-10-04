@@ -60,14 +60,25 @@ async def retrieve_context_node(state: ReviewState, *, repository=None) -> dict:
 
     for query in state["context_request"].queries[:MAX_CONTEXT_QUERIES]:
         tool_calls += 1
-        result = await execute_repository_tool(
-            github_client=client,
-            tool_name="search_code",
-            arguments={"query": query},
-            owner=pull_request.owner,
-            repository=pull_request.repository,
-            ref=pull_request.head_sha,
-        )
+        try:
+            result = await execute_repository_tool(
+                github_client=client,
+                tool_name="search_code",
+                arguments={"query": query},
+                owner=pull_request.owner,
+                repository=pull_request.repository,
+                ref=pull_request.head_sha,
+            )
+        except (httpx.HTTPError, KeyError, ValueError):
+            # Code search is heavily rate limited; one failed query must not
+            # abort the review, and the model must not read it as "no matches".
+            records.append(ToolCallRecord(
+                call_id=f"context-{tool_calls}", name="search_code",
+                arguments={"query": query}, status="completed",
+                result="Search failed; no candidate paths were inspected.",
+            ))
+            context.append(f"Search query: {query}\nSearch failed; absence of results is not evidence.")
+            continue
         records.append(ToolCallRecord(
             call_id=f"context-{tool_calls}", name="search_code",
             arguments={"query": query}, status="completed",
