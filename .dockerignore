@@ -1,0 +1,15 @@
+.git
+.env
+**/.env
+deploy/*.env
+deploy/secrets
+deploy/backups
+.venv
+.uv-cache
+**/__pycache__
+frontend/node_modules
+frontend/dist
+evaluation/results
+tests
+.agents
+.codex

@@ -1,0 +1,26 @@
+[Unit]
+Description=Code review sandbox worker
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=review-worker
+Group=review-worker
+SupplementaryGroups=docker
+WorkingDirectory=/opt/code-review-agent
+EnvironmentFile=/etc/code-review-worker.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/code-review-agent/.venv/bin/uvicorn app.sandbox_worker:app --host ${WORKER_BIND_ADDRESS} --port 8010 --workers 1 --no-access-log --timeout-graceful-shutdown 300
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=300
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

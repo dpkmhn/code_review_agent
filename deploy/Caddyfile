@@ -1,0 +1,32 @@
+{
+    admin off
+}
+
+{$PUBLIC_HOST} {
+    basic_auth {
+        {$WORKSPACE_USER} {$WORKSPACE_PASSWORD_HASH}
+    }
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy no-referrer
+        Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+        Cache-Control no-store
+    }
+    @api path /api/*
+    handle @api {
+        request_body {
+            max_size 1MB
+        }
+        reverse_proxy api:8000 {
+            header_up Authorization "Bearer {$API_ACCESS_TOKEN}"
+            transport http {
+                response_header_timeout 1800s
+            }
+        }
+    }
+    handle {
+        root * /srv
+        try_files {path} /index.html
+        file_server
+    }
+}
