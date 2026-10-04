@@ -9,3 +9,17 @@ wheels/
 
 # Virtual environments
 .venv
+.uv-cache/
+
+# Local evaluation reports (may include repository evidence)
+evaluation/results/
+
+# React UI
+frontend/node_modules/
+frontend/dist/
+
+# Deployment credentials and database snapshots
+deploy/*.env
+deploy/backups/
+deploy/secrets/
+.npm-cache/
