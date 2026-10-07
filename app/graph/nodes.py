@@ -7,10 +7,11 @@ from app.graph.state import ReviewState
 from app.github_client import GitHubClient
 from app.schemas.ai_review import ReviewResult
 from app.schemas.hypothesis import EvidenceEvaluation, VerificationEvidence
-from app.schemas.persistence import ToolCallRecord
+from app.schemas.tool_call import ToolCallRecord
 from app.services.context_service import ContextService
 from app.services.llm_review_service import LLMReviewService
 from app.tools.executor import execute_repository_tool
+from app.tools.tree import tree_evidence, tree_prompt
 from app.tools.verification_tools import bounded_content, build_verification_tools
 
 context_service = ContextService()
@@ -32,6 +33,8 @@ async def analyse_diff_node(state: ReviewState) -> dict:
         "diff": review_service._build_diff(pull_request),
         "changed_files": [file.filename for file in pull_request.files],
         "relevant_context": [],
+        "tree_evidence": None,
+        "tree_context": "",
         "hypotheses": [],
         "hypothesis_index": 0,
         "evidence": [],
@@ -42,6 +45,24 @@ async def analyse_diff_node(state: ReviewState) -> dict:
         "messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES)],
         "verification_rounds": 0,
         "verification_tool_calls": 0,
+    }
+
+
+async def load_tree_node(state: ReviewState, *, repository=None) -> dict:
+    """Fetch the PR head file tree once; it feeds the prompt and the evidence list."""
+    pull_request = state["pull_request"]
+    try:
+        result = await execute_repository_tool(
+            github_client=repository or github_client, tool_name="list_tree", arguments={},
+            owner=pull_request.owner, repository=pull_request.repository,
+            ref=pull_request.head_sha,
+        )
+    except (httpx.HTTPError, KeyError, ValueError, AttributeError):
+        # A failed listing proves nothing about which files exist, so record none.
+        return {"tree_evidence": None, "tree_context": ""}
+    return {
+        "tree_evidence": tree_evidence(result, pull_request.head_sha),
+        "tree_context": tree_prompt(result, pull_request.head_sha, state["changed_files"]),
     }
 
 
@@ -118,9 +139,10 @@ async def retrieve_context_node(state: ReviewState, *, repository=None) -> dict:
 
 
 async def form_hypotheses_node(state: ReviewState, *, llm=None) -> dict:
+    tree_context = state.get("tree_context")
     result = await (llm or review_service).form_hypotheses(
         pull_request=state["pull_request"],
-        relevant_context=state["relevant_context"],
+        relevant_context=([tree_context] if tree_context else []) + state["relevant_context"],
     )
     patched_files = {file.filename for file in state["pull_request"].files if file.patch}
     return {"hypotheses": [item for item in result.hypotheses if item.file in patched_files]}
@@ -133,6 +155,8 @@ async def select_hypothesis_node(state: ReviewState) -> dict:
         source="diff", path=file.filename, ref=pr.head_sha,
         content=file.patch, succeeded=True,
     ) for file in pr.files if file.filename == hypothesis.file and file.patch]
+    if state.get("tree_evidence") is not None:
+        evidence.append(state["tree_evidence"])
     return {
         "current_hypothesis": hypothesis,
         "evidence": evidence,

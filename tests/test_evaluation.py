@@ -145,10 +145,12 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
                     "args": {"path": "subject.py", "revision": "head"}}])
 
             async def evaluate_evidence(self, hypothesis, evidence):
-                if len(evidence) != 2 or evidence[1].content != case.head["subject.py"]:
+                # Evidence order: diff, repository tree, then tool results.
+                if ([item.source for item in evidence] != ["diff", "list_tree", "read_file"]
+                        or evidence[2].content != case.head["subject.py"]):
                     raise AssertionError("Local repository inspection did not reach evaluation")
                 return EvidenceEvaluation(status="confirmed", explanation="Inspected head and diff",
-                                          evidence_indices=[0, 1], finding=finding)
+                                          evidence_indices=[0, 2], finding=finding)
 
         with patch("httpx.AsyncClient.send", side_effect=AssertionError("No network allowed")):
             runs = await run_suite([case], ["verification"], offline=True,

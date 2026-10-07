@@ -8,7 +8,7 @@ from app.schemas.ai_review import ReviewResult
 from app.schemas.context import ContextRequest
 from app.schemas.ai_review import ReviewFinding
 from app.schemas.hypothesis import BugHypothesis, EvidenceEvaluation, VerificationEvidence
-from app.schemas.persistence import ToolCallRecord
+from app.schemas.tool_call import ToolCallRecord
 
 
 class ReviewState(TypedDict, total=False):
@@ -16,6 +16,8 @@ class ReviewState(TypedDict, total=False):
     diff: str
     changed_files: list[str]
 
+    tree_evidence: VerificationEvidence | None
+    tree_context: str
     context_request: ContextRequest
     relevant_context: list[str]
     hypotheses: list[BugHypothesis]

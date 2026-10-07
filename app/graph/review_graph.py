@@ -10,10 +10,11 @@ from app.graph.routes import (
 from app.graph.state import ReviewState
 from app.tools.verification_tools import build_tool_node
 
-def build_review_graph(checkpointer=None, *, llm=None, context=None, repository=None, tools=None):
+def build_review_graph(*, llm=None, context=None, repository=None, tools=None):
     """Build an isolated graph; omitted dependencies retain API behavior."""
     selected_tools = nodes.verification_tools if tools is None else tools
     overrides = {
+        "load_tree": partial(nodes.load_tree_node, repository=repository),
         "analyse_context": partial(nodes.analyse_context_node, context=context),
         "retrieve_context": partial(nodes.retrieve_context_node, repository=repository),
         "form_hypotheses": partial(nodes.form_hypotheses_node, llm=llm),
@@ -23,7 +24,7 @@ def build_review_graph(checkpointer=None, *, llm=None, context=None, repository=
     builder = StateGraph(ReviewState)
 
     for name in (
-        "analyse_diff", "analyse_context", "retrieve_context", "form_hypotheses",
+        "analyse_diff", "load_tree", "analyse_context", "retrieve_context", "form_hypotheses",
         "select_hypothesis", "reviewer", "collect_evidence", "evaluate_evidence", "store_finding",
         "discard", "advance_hypothesis", "generate_review",
     ):
@@ -32,7 +33,8 @@ def build_review_graph(checkpointer=None, *, llm=None, context=None, repository=
 
     # PR ingestion stays at the API boundary so GitHub errors retain HTTP mappings.
     builder.add_edge(START, "analyse_diff")
-    builder.add_edge("analyse_diff", "analyse_context")
+    builder.add_edge("analyse_diff", "load_tree")
+    builder.add_edge("load_tree", "analyse_context")
     builder.add_conditional_edges("analyse_context", route_after_context_analysis, {
         "retrieve_context": "retrieve_context", "form_hypotheses": "form_hypotheses",
     })
@@ -57,7 +59,7 @@ def build_review_graph(checkpointer=None, *, llm=None, context=None, repository=
     builder.add_edge("generate_review", END)
 
     # Five hypotheses need more than LangGraph's default 25 supersteps.
-    return builder.compile(checkpointer=checkpointer).with_config({"recursion_limit": 200})
+    return builder.compile().with_config({"recursion_limit": 200})
 
 
 review_graph = build_review_graph()

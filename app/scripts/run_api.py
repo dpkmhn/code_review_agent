@@ -4,8 +4,6 @@ import argparse
 
 import uvicorn
 
-from app.config import settings
-
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -16,7 +14,6 @@ def main():
     uvicorn.run(
         "app.local_app:create_app" if args.serve_ui else "app.main:app",
         factory=args.serve_ui, host="127.0.0.1", reload=args.reload, port=args.port,
-        loop="app.persistence.database:postgres_loop_factory" if settings.database_url else "auto",
     )
 
 

@@ -1,16 +1,14 @@
-from openai import AsyncOpenAI
-
-from app.config import settings
 from app.schemas.context import ContextRequest
 from app.schemas.github import PullRequestData
 from app.services.llm_review_service import LLMReviewService, bounded_description
+from app.services.openai_client import create_openai_client
 
 
 class ContextService:
 
     def __init__(self, usage_observer=None) -> None:
         self.usage_observer = usage_observer
-        self.client = AsyncOpenAI(api_key=settings.openai_api_key)
+        self.client = create_openai_client()
 
     async def analyse_context_need(
         self,

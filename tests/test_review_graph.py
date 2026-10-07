@@ -322,8 +322,8 @@ class ReviewGraphTests(unittest.IsolatedAsyncioTestCase):
 
     def test_context_service_uses_configured_key(self):
         with (
-            patch("app.services.context_service.settings", SimpleNamespace(openai_api_key="test-key")),
-            patch("app.services.context_service.AsyncOpenAI") as client,
+            patch("app.services.openai_client.settings", SimpleNamespace(openai_api_key="test-key", langsmith_tracing=False)),
+            patch("app.services.openai_client.AsyncOpenAI") as client,
         ):
             ContextService()
         client.assert_called_once_with(api_key="test-key")

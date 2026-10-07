@@ -18,6 +18,9 @@ async def execute_repository_tool(
             ref=ref,
         )
 
+    if tool_name == "list_tree":
+        return await github_client.list_tree(owner=owner, repository=repository, ref=ref)
+
     if tool_name == "search_code":
         return await github_client.search_code(
             owner=owner,

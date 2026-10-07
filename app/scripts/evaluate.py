@@ -60,6 +60,8 @@ def main():
         if not args.live:
             os.environ.setdefault("github_token", "offline-unused")
             os.environ.setdefault("openai_api_key", "offline-unused")
+            # Wiring checks make no model calls and are not worth tracing.
+            os.environ["LANGSMITH_TRACING"] = "false"
         from app.config import settings
         from app.evaluation.runner import run_suite
 

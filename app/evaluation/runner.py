@@ -1,6 +1,7 @@
 import time
 
 from langgraph.graph import END, START, StateGraph
+from langsmith import tracing_context
 
 from app.evaluation.dataset import FixtureRepository
 from app.evaluation.metrics import UsageMeter, findings_hash
@@ -62,7 +63,7 @@ async def execute_case(case, number, mode, llm, context, repository):
         raise ValueError(f"Unknown mode: {mode}")
     # Synthetic fixtures cannot be sent to Docker/GitHub archive tools.
     tools = [tool for tool in build_verification_tools(repository)
-             if tool.name in {"read_file", "search_code", "find_references"}]
+             if tool.name in {"read_file", "list_tree", "search_code", "find_references"}]
     graph = build_review_graph(llm=llm, context=context, repository=repository, tools=tools)
     return await graph.ainvoke({"pull_request": pr})
 
@@ -83,7 +84,9 @@ async def run_suite(cases, modes, *, offline, rates=None, progress=None, service
                     llm = context = OfflineReviewer()
                 else:
                     llm, context = LLMReviewService(meter), ContextService(meter)
-                result = await execute_case(case, number, mode, llm, context, FixtureRepository(case))
+                # Groups each case's model calls under filterable LangSmith metadata.
+                with tracing_context(tags=["evaluation", mode], metadata={"case_id": case.id, "mode": mode}):
+                    result = await execute_case(case, number, mode, llm, context, FixtureRepository(case))
                 findings = [finding.model_dump() for finding in result["review"].findings]
                 run.update(status="completed", findings=findings, tool_calls=result.get("tool_calls", 0),
                            verified_findings=len(findings) if mode == "verification" else 0)

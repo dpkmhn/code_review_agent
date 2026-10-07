@@ -4,57 +4,23 @@ x-api-env: &api-env
   environment: production
   github_token: ${GITHUB_TOKEN:?Set GITHUB_TOKEN}
   openai_api_key: ${OPENAI_API_KEY:?Set OPENAI_API_KEY}
-  database_url: ${DATABASE_URL:?Set DATABASE_URL}
   api_access_token: ${API_ACCESS_TOKEN:?Set API_ACCESS_TOKEN}
   public_origin: https://${PUBLIC_HOST:?Set PUBLIC_HOST}
   sandbox_enabled: ${SANDBOX_ENABLED:-false}
   sandbox_worker_url: ${SANDBOX_WORKER_URL:-}
   sandbox_worker_token: ${SANDBOX_WORKER_TOKEN:-}
+  langsmith_tracing: ${LANGSMITH_TRACING:-false}
+  langsmith_api_key: ${LANGSMITH_API_KEY:-}
+  langsmith_project: ${LANGSMITH_PROJECT:-code-review-agent}
 
 services:
-  db:
-    image: postgres:17-bookworm
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: code_reviews
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
-      REVIEW_DB_PASSWORD: ${REVIEW_DB_PASSWORD:?Set REVIEW_DB_PASSWORD}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./init-role.sh:/docker-entrypoint-initdb.d/init-role.sh:ro
-    networks: [database]
-    healthcheck:
-      test: [CMD-SHELL, 'pg_isready -U postgres -d code_reviews']
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-  migrate:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile.api
-    environment: *api-env
-    command: [python, -m, app.scripts.init_database]
-    networks: [database]
-    depends_on:
-      db:
-        condition: service_healthy
-    read_only: true
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    tmpfs: [/tmp:size=64m,mode=1777]
-
   api:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.api
     restart: unless-stopped
     environment: *api-env
-    networks: [database, gateway, outbound]
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
+    networks: [gateway, outbound]
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
@@ -89,13 +55,10 @@ services:
         condition: service_healthy
 
 networks:
-  database:
-    internal: true
   gateway:
     internal: true
   outbound: {}
 
 volumes:
-  postgres_data: {}
   caddy_data: {}
   caddy_config: {}

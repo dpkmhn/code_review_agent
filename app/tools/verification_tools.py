@@ -13,6 +13,7 @@ from app.github_client import GitHubClient
 from app.schemas.hypothesis import VerificationEvidence
 from app.services.sandbox_service import SandboxService
 from app.tools.executor import execute_repository_tool
+from app.tools.tree import tree_evidence
 
 
 MAX_EVIDENCE_CHARS = 12_000
@@ -41,7 +42,7 @@ def build_verification_tools(github_client: GitHubClient):
                 content="Snapshot download failed; execution did not run.", succeeded=False)
         return evidence.model_dump_json(), evidence
     async def execute(name, arguments, state, revision="head"):
-        if name != "read_file":
+        if name in {"search_code", "find_references"}:
             query = arguments.get("query", arguments.get("symbol", ""))
             if not query.strip() or re.search(r"\b(?:repo|org|user)\s*:", query, re.IGNORECASE):
                 raise ValueError("Use nonempty search text without repository scope qualifiers.")
@@ -59,14 +60,17 @@ def build_verification_tools(github_client: GitHubClient):
                     content=bounded_content(result), succeeded=True,
                 )
                 return evidence.model_dump_json(), evidence
+            if name == "list_tree":
+                evidence = tree_evidence(result, ref, path)
+                return evidence.content, evidence
             # Search hits locate candidates; they are not inspected code at the PR SHA.
             return json.dumps({"candidate_paths_default_branch": result,
                                "note": "Read candidate files at head or base before citing code."}), None
         except (httpx.HTTPError, UnicodeDecodeError, KeyError, ValueError):
             evidence = VerificationEvidence(
-                source="read_file", path=path, ref=ref,
+                source=name, path=path or ".", ref=ref,
                 content="File inspection failed; no contents inspected.", succeeded=False,
-            ) if name == "read_file" else None
+            ) if name in {"read_file", "list_tree"} else None
             return json.dumps({"error": "Repository tool failed; no contents inspected."}), evidence
 
     @tool(response_format="content_and_artifact")
@@ -76,6 +80,16 @@ def build_verification_tools(github_client: GitHubClient):
         if not path or path.startswith(("/", "\\")) or ":" in path or ".." in path.replace("\\", "/").split("/"):
             raise ValueError("Use a repository-relative file path without traversal.")
         return await execute("read_file", {"path": path}, state, revision)
+
+    @tool(response_format="content_and_artifact")
+    async def list_tree(revision: Literal["head", "base"], state: Annotated[dict, InjectedState],
+                        directory: str = ""):
+        """List repository file paths at the PR head or base, optionally under one directory.
+        A successful listing that lacks a path is valid evidence the path does not exist."""
+        if directory and (directory.startswith(("/", "\\")) or ":" in directory
+                          or ".." in directory.replace("\\", "/").split("/")):
+            raise ValueError("Use a repository-relative directory without traversal.")
+        return await execute("list_tree", {"path": directory}, state, revision)
 
     @tool(response_format="content_and_artifact")
     async def search_code(query: str, state: Annotated[dict, InjectedState]):
@@ -99,7 +113,7 @@ def build_verification_tools(github_client: GitHubClient):
         """Run Ruff on one file in an offline disposable sandbox with isolated config."""
         return await execute_sandbox("run_static_analysis", path, revision, state)
 
-    return [read_file, search_code, find_references, run_test, run_static_analysis]
+    return [read_file, list_tree, search_code, find_references, run_test, run_static_analysis]
 
 
 def build_tool_node(tools):

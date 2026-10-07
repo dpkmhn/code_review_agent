@@ -408,7 +408,12 @@ Then destroy it after review.
 Your source explicitly calls isolation a critical requirement because the repository code is untrusted. Pasted text
 
 ## Stage 10 — Persistence + checkpointing
-Implemented: optional PostgreSQL tables persist review runs, findings, tool-call
+Removed on 2026-10-07: PostgreSQL storage, LangGraph checkpointing, and the
+lookup/resume endpoints were taken out of the project. Reviews are transient;
+`POST /api/v1/reviews` returns findings and tool evidence directly. The notes
+below describe the removed implementation.
+
+Previously implemented: optional PostgreSQL tables persist review runs, findings, tool-call
 records, and sandbox executions. LangGraph uses AsyncPostgresSaver with a stable
 review UUID, synchronous checkpoints, and allowlisted application model types.
 Lookup and explicit resume endpoints recover failed/interrupted runs at the
@@ -503,32 +508,29 @@ That is actually more interesting than comparing models.
 
 Implemented: a local React/Vite workspace submits GitHub PR reviews, displays
 verified findings and changed files, and links findings to the exact reviewed
-head revision. Saved review UUIDs support lookup, status/evidence refresh, and
-explicit resume. Error responses preserve failed-run IDs for recovery. The UI
-supports transient operation without PostgreSQL and escapes repository/tool
-text. Synchronous requests have a waiting state and prevent duplicate submission;
+head revision, with the tool evidence returned by the review. The UI escapes
+repository/tool text. (Saved-review lookup and resume were removed with
+PostgreSQL on 2026-10-07.) Synchronous requests have a waiting state and prevent duplicate submission;
 there is no invented graph progress or automatic retry. Component tests mock
-API requests for submission, validation, failure recovery, evidence, resume,
-and unavailable persistence. Production hosting remains stage 13; real-model
-end-to-end UI evaluation and live persisted-run recovery remain pending.
+API requests for submission, validation, evidence, and error handling.
+Production hosting remains stage 13; real-model end-to-end UI evaluation
+remains pending.
 
 ## Stage 13 — Deployment
 
 Current decision: keep the application local. Hosted rollout and a separate Linux
 worker are intentionally deferred; the deployment foundation remains available
-for a later rollout. Local development continues without PostgreSQL or sandbox
+for a later rollout. Local development continues without sandbox
 execution unless explicitly configured.
 
 Deployment foundation implemented: Linux Compose builds/hosts the React UI behind
 an HTTPS Caddy gateway with shared workspace authentication, protects review API
-routes with a server-only bearer token and browser origin checks, and runs private
-PostgreSQL with a non-superuser application role and initialization dependency.
+routes with a server-only bearer token and browser origin checks.
 Production execution dispatches bounded exact-revision archives to an authenticated
-separate Linux worker with no upstream/database credentials. Deployment examples,
-systemd worker setup, a synthetic isolation smoke CLI, and backup/restore/update
-runbooks are in deploy/. Offline auth/worker/regression tests and the frontend
-build are verified. Live deployment, Docker/Caddy/Compose validation, PostgreSQL
-restore drills, private-network configuration, and end-to-end review/worker checks
+separate Linux worker with no upstream credentials. Deployment examples,
+systemd worker setup, a synthetic isolation smoke CLI, and update runbooks are
+in deploy/. Offline auth/worker/regression tests and the frontend
+build are verified. Live deployment, Docker/Caddy/Compose validation, private-network configuration, and end-to-end review/worker checks
 remain pending until a Linux hosting target, domain, and credentials are supplied.
 Per-user isolation, cloud provisioning, scheduling, and operational monitoring
 remain future work.
@@ -542,7 +544,7 @@ above and implemented in `frontend/`. Stage 15 is deployment, documented in
 the Stage 13 section above; hosted rollout remains deferred. The current
 stage 15 target is local deployment: the built React UI and API run together
 on loopback using `app.scripts.run_api --serve-ui`, without a Vite process.
-See README.md for build, launch, and restart instructions. Docker/PostgreSQL
+See README.md for build, launch, and restart instructions. Docker
 and paid model end-to-end validation remain separate optional checks.
 
 Stage 15 local status: implemented and validated on 2026-10-03. Backend tests
@@ -553,8 +555,8 @@ assets, health/readiness, docs, API validation, missing paths, and disabled
 persistence. Live GitHub/OpenAI review submission was not part of this smoke.
 
 Stage 14 status: implemented. The four frontend component tests and production
-build passed on 2026-10-03. Live model end-to-end UI validation and persisted-run
-recovery remain pending as described above.
+build passed on 2026-10-03. Live model end-to-end UI validation remains pending
+as described above.
 
 1. **FastAPI foundation**
 2. **GitHub PR ingestion**

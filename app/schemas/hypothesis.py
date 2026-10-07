@@ -28,7 +28,7 @@ class HypothesisResult(BaseModel):
 
 
 class VerificationEvidence(BaseModel):
-    source: Literal["diff", "read_file", "run_test", "run_static_analysis"]
+    source: Literal["diff", "read_file", "list_tree", "run_test", "run_static_analysis"]
     path: str
     ref: str
     content: str

@@ -12,9 +12,8 @@ dependencies = [
     "httpx>=0.28.1",
     "langchain-core>=1.6.6",
     "langgraph>=1.2.12",
-    "langgraph-checkpoint-postgres>=3.0",
+    "langsmith>=0.14.2",
     "openai>=3.22.1",
-    "psycopg[binary,pool]>=3.2",
     "pydantic-settings>=2.15.0",
     "uvicorn>=0.54.0",
 ]

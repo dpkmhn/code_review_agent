@@ -1,1 +1,1 @@
-"""Pinned synthetic review evaluation, without GitHub or persistence access."""
+"""Pinned synthetic review evaluation, without GitHub access."""

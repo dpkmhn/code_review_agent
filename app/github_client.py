@@ -117,6 +117,19 @@ class GitHubClient:
         return content.decode("utf-8")
 
 
+    # List every file path at a revision in one call
+    async def list_tree(self, owner: str, repository: str, ref: str) -> dict:
+        url = f"{self.BASE_URL}/repos/{owner}/{repository}/git/trees/{quote(ref, safe='')}"
+        async with httpx.AsyncClient(headers=self._headers(), timeout=30.0,
+                                     transport=self._transport) as client:
+            res = await client.get(url, params={"recursive": "1"})
+            res.raise_for_status()
+        data = res.json()
+        return {
+            "paths": sorted(item["path"] for item in data.get("tree", []) if item.get("type") == "blob"),
+            "truncated": bool(data.get("truncated")),
+        }
+
     # Search the repository for code or a symbol
     async def search_code(
         self,

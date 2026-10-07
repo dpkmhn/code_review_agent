@@ -88,6 +88,10 @@ class FixtureRepository:
         self._check_scope(owner, repository)
         return self.snapshots[ref][path]
 
+    async def list_tree(self, *, owner, repository, ref):
+        self._check_scope(owner, repository)
+        return {"paths": sorted(self.snapshots[ref]), "truncated": False}
+
     async def search_code(self, *, owner, repository, query):
         self._check_scope(owner, repository)
         # Deliberately simpler than GitHub query syntax. Literal, case-insensitive search.

@@ -23,37 +23,32 @@ Stop it with Ctrl+C. Rebuild after frontend changes and restart after backend
 changes. `/health`, `/ready`, and `/docs` remain available. Only `frontend/dist`
 is served, and missing files/API paths return 404.
 
-Local operation does not require Docker or PostgreSQL. Without PostgreSQL,
-reviews are transient and saved-review lookup/resume is unavailable. Execution
+Local operation does not require Docker or a database. Reviews are not
+stored: each result lives only in the open page. Execution
 remains disabled unless explicitly configured. Hosted deployment is deferred;
 the Linux deployment foundation below is available for a later rollout.
 
 ## Stage 13: Deployment foundation
 
 `deploy/` now provides a portable Linux Compose deployment for the built React
-UI, an HTTPS/authenticated Caddy gateway, a protected FastAPI service, and private
-PostgreSQL with a non-superuser application role and a one-shot initialization
-service. A separate authenticated Linux worker executes bounded snapshots with
+UI, an HTTPS/authenticated Caddy gateway, and a protected FastAPI service.
+A separate authenticated Linux worker executes bounded snapshots with
 the existing Docker isolation; the API has no Docker access in production.
-Production configuration fails startup without access control, an HTTPS origin,
-and persistence. All authenticated members share the workspace's reviews.
+Production configuration fails startup without access control or an HTTPS origin.
 
 See the [deployment guide](deploy/README.md) for configuration, launch, worker
-setup, smoke tests, database backups/restores, updates, and recovery. This is
+setup, smoke tests, and updates. This is
 deployment preparation: no cloud resources have been created and no live host
-has been deployed. Docker/HTTPS and live database/worker checks remain pending.
+has been deployed. Docker/HTTPS and live worker checks remain pending.
 
 ## Stage 12: React UI
 
 The React workspace in `frontend/` submits PR reviews, displays findings with
-links to the reviewed GitHub revision, and opens saved reviews by UUID. Saved
-reviews support status refresh, checkpointed tool evidence, and explicit resume
-after an interrupted run. Without PostgreSQL, new reviews still work but cannot
-be reopened. The UI handles validation, upstream errors, and failed-run IDs;
-repository text is rendered as plain text.
+links to the reviewed GitHub revision, and shows the tool evidence collected
+during the review. The UI handles validation and upstream errors; repository
+text is rendered as plain text.
 
-Start the API using the local instructions below (use `app.scripts.run_api`
-when persistence is enabled on Windows). In a second terminal, with Node.js
+Start the API using the local instructions below. In a second terminal, with Node.js
 22.12 or newer:
 
 ```powershell
@@ -67,10 +62,7 @@ Open http://127.0.0.1:5173. Vite proxies `/api` to the backend at
 configuration is unnecessary for local use. Reviews are synchronous: keep the
 page open until completion. The UI prevents overlapping requests and does not
 automatically retry submissions or claim live graph progress. If the connection
-is lost, the backend may continue processing; a saved review UUID is needed to
-recover it. New persisted-review responses omit tool records; refresh the result
-to retrieve them. Refreshing the browser clears the workspace; copy the review
-UUID to reopen it later.
+is lost or the browser is refreshed, the result is lost; start a new review.
 
 ```powershell
 cd frontend
@@ -111,80 +103,6 @@ changing the default; each report records the level used:
 uv run python -m app.scripts.evaluate --live --modes verification --verification-reasoning none --output evaluation/results/reasoning-none.json
 uv run python -m app.scripts.evaluate --live --modes verification --verification-reasoning medium --output evaluation/results/reasoning-medium.json
 ```
-
-## Stage 10: Persistence and checkpointing
-
-Optional PostgreSQL storage now saves review runs, verified findings, repository
-tool calls, and sandbox execution evidence. Each persisted review uses its UUID
-as a LangGraph checkpoint thread. `GET /api/v1/reviews/{review_id}` retrieves
-status, findings, and tool records; `POST /api/v1/reviews/{review_id}/resume`
-continues the latest checkpoint using the original PR head and base SHAs.
-Completed reviews return their saved result when resumed.
-
-### Enable persistence
-
-Create a PostgreSQL database and set the connection string in `.env`:
-
-```dotenv
-database_url=postgresql://review_user:your_password@localhost:5432/code_reviews
-```
-
-Install dependencies and initialize the application tables and LangGraph
-checkpoint migrations before starting workers:
-
-```powershell
-uv sync
-uv run python -m app.scripts.init_database
-uv run python -m app.scripts.run_api --reload
-```
-
-The launcher selects a custom loop factory for psycopg's Windows requirement.
-On Windows, keep `sandbox_enabled=false` when persistence is enabled. PostgreSQL
-and Docker subprocess execution together require a Linux API host in this stage.
-The loop factory also works on Linux. Without `database_url`, review creation
-keeps the transient workflow and lookup/resume return HTTP 503.
-
-`POST /api/v1/reviews` remains synchronous and adds `review_id` plus a `Location`
-header when persistence is enabled. A graph failure returns HTTP 502 with that
-ID, so the client can retrieve and resume it. Graph checkpoints are saved
-synchronously between steps; application projections are transactional and
-idempotent. A PostgreSQL advisory lock prevents simultaneous execution of the
-same review across workers (HTTP 409). Worker death releases the lock, allowing
-an explicit resume of a run still marked `running`. There is no automatic
-background recovery worker. A final checkpoint can restore findings even when
-the process died before marking the application row complete.
-
-Checkpoint recovery can repeat a node or unfinished tool batch whose output was
-not committed. Model and tool execution are therefore at least once; sandbox
-calls can be repeated. Tool audit records show pending batches and completed
-results, including invalid requests. Context retrieval records are committed
-when that node completes. Records accumulate across hypotheses and upsert by
-stable call IDs. Audit records describe checkpointed logical calls, not every
-physical retry attempt. Search results identify paths on the default branch;
-file and execution evidence retain the selected PR SHA. The `executions` table
-stores the sandbox output, completion flag, exit code, and timeout.
-
-Checkpoint data includes PR code and model messages. Use a private database;
-local development has no authentication by default. Production requires the
-stage 13 gateway and API token, with shared workspace access. Exception
-text and API credentials are not stored in review error fields. Checkpoint
-restoration allows only the application's model classes and LangGraph's built-in
-types, with pickle fallback disabled. Database/checkpoint retention and deployment
-migrations beyond this initial schema remain operational follow-ups. See
-[LangGraph persistence](https://docs.langchain.com/oss/python/langgraph/persistence)
-for thread and checkpointer behavior.
-
-Run the optional integration tests against a disposable PostgreSQL database:
-
-```powershell
-$env:TEST_DATABASE_URL = "postgresql://review_user:your_password@localhost:5432/code_reviews_test"
-uv run python -m unittest discover -s tests -p test_persistence.py -v
-Remove-Item Env:TEST_DATABASE_URL
-```
-
-These tests create tables and synthetic reviews. They verify migrations can be
-repeated, checkpoint recovery through a new connection pool, cross-connection
-locking, saved findings, and execution evidence without GitHub/OpenAI calls.
 
 ## Review workflow and sandbox
 
@@ -268,7 +186,7 @@ Execution evidence records output, exit code, and timeout. `succeeded` means the
 command completed with exit code 0 or 1, not that tests passed. Collection errors,
 OOM kills, timeouts, disabled execution, and infrastructure failures cannot support
 confirmation. A test failure alone does not establish a regression.
-Reviews remain synchronous; PostgreSQL persistence is optional as described above.
+Reviews remain synchronous.
 
 ### Enable execution
 
@@ -329,6 +247,24 @@ Submit `POST /api/v1/reviews` with:
 ```
 
 The response contains PR metadata and the verified findings.
+
+### LangSmith tracing
+
+Tracing is off by default. To send each review to LangSmith, add to `.env`:
+
+```
+langsmith_tracing=true
+langsmith_api_key=lsv2_...
+langsmith_project=code-review-agent
+```
+
+Set `langsmith_endpoint` as well for a self-hosted or EU instance. Each API
+review appears as a `pull_request_review` trace tagged with the repository and
+PR number, with a child run per graph node, tool call, and OpenAI request
+(including token usage). Live evaluation runs are tagged `evaluation` with the
+case ID and mode; offline wiring checks are never traced. Traces contain PR
+diffs and repository content, so only enable this for repositories you may
+share with LangSmith.
 
 Run mocked graph tests (no external API requests):
 

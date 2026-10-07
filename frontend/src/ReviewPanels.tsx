@@ -1,43 +1,46 @@
-import React from 'react';
+import type { CSSProperties } from 'react';
+import type { Finding, Review, ReviewStatus, Severity } from './types';
 
-export const SEVERITIES = ['critical', 'high', 'medium', 'low'];
+export const SEVERITIES: Severity[] = ['critical', 'high', 'medium', 'low'];
 
 // Mirrors the backend graph; the API does not stream per-stage progress, so stages are shown as a whole.
-const STAGES = [
+const STAGES: [icon: string, label: string][] = [
   ['⇣', 'Fetch PR'], ['±', 'Analyse diff'], ['⌕', 'Context'],
   ['?', 'Hypotheses'], ['⚙', 'Verify'], ['✓', 'Report'],
 ];
 
-export function parsePullRequestLink(value) {
+export function parsePullRequestLink(value: string): { repository: string; number: string } | null {
   const match = value.trim().match(/^(?:https?:\/\/)?(?:www\.)?github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/(\d+)/i)
     || value.trim().match(/^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#(\d+)$/);
   return match ? { repository: `${match[1]}/${match[2]}`, number: match[3] } : null;
 }
 
-function formatElapsed(seconds) {
+function formatElapsed(seconds: number) {
   const minutes = Math.floor(seconds / 60);
   return minutes ? `${minutes}m ${String(seconds % 60).padStart(2, '0')}s` : `${seconds}s`;
 }
 
-export function Pipeline({ state, elapsed }) {
-  const caption = {
+export function Pipeline({ state, elapsed }: { state: ReviewStatus; elapsed?: number }) {
+  const caption: Record<ReviewStatus, string> = {
     running: `Running on the server · ${formatElapsed(elapsed ?? 0)} elapsed`,
     reviewed: 'Review complete',
     failed: 'Run stopped before completing — resume it to continue',
     pending: 'Saved run in progress on the server',
-  }[state] || 'Saved run in progress on the server';
+  };
   return <div className={`pipeline is-${state}`}>
     <ol aria-label="Review stages">
-      {STAGES.map(([icon, label], index) => <li key={label} style={{ '--i': index }}>
+      {STAGES.map(([icon, label], index) => <li key={label} style={{ '--i': index } as CSSProperties}>
         <span className="stage-icon" aria-hidden="true">{icon}</span><small>{label}</small>
       </li>)}
     </ol>
-    <p className="pipeline-caption">{caption}</p>
+    <p className="pipeline-caption">{caption[state]}</p>
     {state === 'running' && <p className="pipeline-hint">Stages run server-side; live per-stage progress isn't streamed yet.</p>}
   </div>;
 }
 
-export function verdictFor(review) {
+export type VerdictTone = 'pending' | 'danger' | 'warn' | 'note' | 'ok';
+
+export function verdictFor(review: Review): { tone: VerdictTone; label: string; detail: string } {
   if (review.status !== 'reviewed') return { tone: 'pending', label: 'Verdict pending', detail: 'The review has not finished.' };
   const counts = countBySeverity(review.findings);
   if (counts.critical || counts.high) return { tone: 'danger', label: 'Request changes', detail: `${counts.critical + counts.high} high-impact finding${counts.critical + counts.high === 1 ? '' : 's'} to address before merging.` };
@@ -46,11 +49,13 @@ export function verdictFor(review) {
   return { tone: 'ok', label: 'No blocking findings', detail: 'Nothing was confirmed. A human review is still recommended.' };
 }
 
-export function countBySeverity(findings) {
-  return Object.fromEntries(SEVERITIES.map((s) => [s, findings.filter((f) => f.severity === s).length]));
+export function countBySeverity(findings: Finding[]): Record<Severity, number> {
+  return Object.fromEntries(SEVERITIES.map((s) => [s, findings.filter((f) => f.severity === s).length])) as Record<Severity, number>;
 }
 
-export function Scorecard({ review, filter, onFilter }) {
+interface ScorecardProps { review: Review; filter: Severity | null; onFilter: (severity: Severity | null) => void }
+
+export function Scorecard({ review, filter, onFilter }: ScorecardProps) {
   const counts = countBySeverity(review.findings);
   const verdict = verdictFor(review);
   return <div className="scorecard">

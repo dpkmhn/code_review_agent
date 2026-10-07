@@ -28,11 +28,10 @@ def snapshot(name="root/tests/test_a.py"):
 class ConfigurationTests(unittest.TestCase):
     def test_production_fails_closed(self):
         config = dict(github_token="test", openai_api_key="test", environment="production",
-                      _env_file=None, api_access_token=TOKEN, public_origin="https://reviews.example.com",
-                      database_url="postgresql://test/test")
+                      _env_file=None, api_access_token=TOKEN, public_origin="https://reviews.example.com")
         Settings(**config)
         for key, value in (("api_access_token", None), ("api_access_token", "short"),
-                           ("database_url", None), ("public_origin", "http://example.com"),
+                           ("public_origin", "http://example.com"),
                            ("public_origin", "https://example.com/path")):
             with self.subTest(key=key), self.assertRaises(ValidationError):
                 Settings(**(config | {key: value}))
@@ -48,32 +47,23 @@ class AccessTests(unittest.IsolatedAsyncioTestCase):
             "app.api.reviews.review_service.ingest_pull_request", AsyncMock()
         ) as ingest:
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://api") as client:
-                for method, path in (("POST", "/api/v1/reviews"),
-                                     ("GET", "/api/v1/reviews/00000000-0000-0000-0000-000000000001"),
-                                     ("POST", "/api/v1/reviews/00000000-0000-0000-0000-000000000001/resume")):
-                    response = await client.request(method, path, json={"repository": "o/r", "pull_request_number": 1})
-                    self.assertEqual(response.status_code, 401)
+                response = await client.post("/api/v1/reviews", json={"repository": "o/r", "pull_request_number": 1})
+                self.assertEqual(response.status_code, 401)
                 self.assertEqual((await client.get("/health")).status_code, 200)
             ingest.assert_not_awaited()
 
-    async def test_cross_site_submission_rejected_and_authorized_lookup_allowed(self):
-        app.state.review_runner = None
+    async def test_cross_site_submission_rejected_and_same_origin_allowed(self):
         with patch.object(settings, "api_access_token", SecretStr(TOKEN)), patch.object(
             settings, "public_origin", "https://reviews.example.com"
-        ):
+        ), patch("app.api.reviews.review_service.ingest_pull_request", AsyncMock(side_effect=ValueError("bad"))):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://api",
                                         headers={"Authorization": "Bearer " + TOKEN}) as client:
                 response = await client.post("/api/v1/reviews", headers={"Origin": "https://evil.example"},
                                              json={"repository": "o/r", "pull_request_number": 1})
                 self.assertEqual(response.status_code, 403)
-                response = await client.get("/api/v1/reviews/00000000-0000-0000-0000-000000000001")
-                self.assertEqual(response.status_code, 503)  # Passed auth; persistence absent.
-
-    async def test_readiness_reflects_database_failure(self):
-        with patch.object(settings, "database_url", SecretStr("postgresql://test/test")):
-            app.state.database_pool = None
-            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://api") as client:
-                self.assertEqual((await client.get("/ready")).status_code, 503)
+                response = await client.post("/api/v1/reviews", headers={"Origin": "https://reviews.example.com"},
+                                             json={"repository": "o/r", "pull_request_number": 1})
+                self.assertEqual(response.status_code, 400)  # Passed auth and origin checks.
 
 
 class WorkerTests(unittest.IsolatedAsyncioTestCase):
