@@ -1,273 +1,253 @@
-# Code review agent
+# Code Review Agent
 
-FastAPI and LangGraph review GitHub pull requests using structured GPT-6 Luna
-outputs and repository evidence.
+An agentic, evidence-driven reviewer for GitHub pull requests.
 
-## Stage 15: Local deployment
+- Forms hypotheses about potential defects in the diff
+- Verifies each one against the repository at the exact reviewed revision
+- Reports only findings backed by evidence
 
-Build the React UI once, then serve it and the API together on loopback:
+![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
+![LangGraph](https://img.shields.io/badge/LangGraph-1C3C3C?logo=langchain&logoColor=white)
+![OpenAI](https://img.shields.io/badge/OpenAI-412991?logo=openai&logoColor=white)
+![React](https://img.shields.io/badge/React-TypeScript-3178C6?logo=react&logoColor=white)
 
-```powershell
-cd frontend
-npm ci
-npm run build
-cd ..
-$env:UV_CACHE_DIR = Join-Path (Get-Location) '.uv-cache'
-uv run python -m app.scripts.run_api --serve-ui --port 8001
-```
+<p align="center">
+  <img src="frontend/dark-theme-preview.jpg" alt="Review workspace showing the pipeline from fetching a PR to the final report" width="420">
+</p>
 
-Open http://127.0.0.1:8001. The built UI calls the API on the same origin;
-no Vite process or proxy is required. Configure `.env` as described below.
-The launcher binds only to `127.0.0.1` and requires development settings.
-Stop it with Ctrl+C. Rebuild after frontend changes and restart after backend
-changes. `/health`, `/ready`, and `/docs` remain available. Only `frontend/dist`
-is served, and missing files/API paths return 404.
+**Contents:** [Overview](#overview) · [Getting started](#getting-started) ·
+[Configuration](#configuration) · [API](#api) · [Deployment](#deployment) ·
+[Troubleshooting](#troubleshooting)
 
-Local operation does not require Docker or a database. Reviews are not
-stored: each result lives only in the open page. Execution
-remains disabled unless explicitly configured. Hosted deployment is deferred;
-the Linux deployment foundation below is available for a later rollout.
+## Overview
 
-## Stage 13: Deployment foundation
+- **Problem:** diff-only reviewers flag code that looks wrong in isolation but is fine in
+  context (a caller, a config value, an existing test).
+- **Approach:** every suspected defect must be backed by repository evidence, or optionally
+  a sandboxed test run, before it is reported.
+- **Result:** fewer findings, each traceable to its supporting evidence.
 
-`deploy/` now provides a portable Linux Compose deployment for the built React
-UI, an HTTPS/authenticated Caddy gateway, and a protected FastAPI service.
-A separate authenticated Linux worker executes bounded snapshots with
-the existing Docker isolation; the API has no Docker access in production.
-Production configuration fails startup without access control or an HTTPS origin.
+## Architecture
 
-See the [deployment guide](deploy/README.md) for configuration, launch, worker
-setup, smoke tests, and updates. This is
-deployment preparation: no cloud resources have been created and no live host
-has been deployed. Docker/HTTPS and live worker checks remain pending.
-
-## Stage 12: React UI
-
-The React workspace in `frontend/` submits PR reviews, displays findings with
-links to the reviewed GitHub revision, and shows the tool evidence collected
-during the review. The UI handles validation and upstream errors; repository
-text is rendered as plain text.
-
-Start the API using the local instructions below. In a second terminal, with Node.js
-22.12 or newer:
-
-```powershell
-cd frontend
-npm ci
-npm run dev
-```
-
-Open http://127.0.0.1:5173. Vite proxies `/api` to the backend at
-`http://127.0.0.1:8000`, so backend credentials stay on the server and CORS
-configuration is unnecessary for local use. Reviews are synchronous: keep the
-page open until completion. The UI prevents overlapping requests and does not
-automatically retry submissions or claim live graph progress. If the connection
-is lost or the browser is refreshed, the result is lost; start a new review.
-
-```powershell
-cd frontend
-npm test
-npm run build
-```
-
-The production output is `frontend/dist`. Stage 13's Caddy deployment hosts the
-UI and proxies `/api` to FastAPI. `npm run preview` previews static assets
-only; use `npm run dev` for the local API connection. This remains a local
-development application using the backend's existing access model.
-
-## Stage 11: Evaluation
-
-The evaluation CLI compares diff-only review, LangGraph context retrieval, and
-the full verification graph on 20 synthetic buggy PRs and 10 synthetic clean PRs.
-It records findings, tool calls, latency, API tokens, and optional estimated cost.
-Recall requires semantic adjudication; clean-PR false positives are counted
-directly. Failed reviews are tracked separately from quality metrics.
-
-```powershell
-uv run python -m app.scripts.evaluate
-```
-
-The default runs an offline wiring check with no external calls. Use `--live`
-for paid model evaluation. The fixtures use pinned local snapshots and repository
-inspection tools; sandbox execution is excluded. See the
-[evaluation guide](evaluation/README.md) for live runs, scoring, metric definitions,
-and dataset limitations. Model quality has not yet been measured on this dataset.
-
-The tool-calling reviewer uses the Responses API, because Chat Completions
-rejects function tools with reasoning on GPT-6 Luna. Its reasoning level is set
-by `verification_reasoning_effort` in `.env` (`none`, `low`, `medium`, or
-`high`; default `none`). Compare levels on the verification graph before
-changing the default; each report records the level used:
-
-```powershell
-uv run python -m app.scripts.evaluate --live --modes verification --verification-reasoning none --output evaluation/results/reasoning-none.json
-uv run python -m app.scripts.evaluate --live --modes verification --verification-reasoning medium --output evaluation/results/reasoning-medium.json
-```
-
-## Review workflow and sandbox
-
-The API ingests the PR and preserves its GitHub error mappings. The graph then
-runs this workflow:
+Each review runs as a LangGraph state machine:
 
 ```text
-analyse_diff → analyse_context → [retrieve_context] → form_hypotheses
-                                                        ↓
-                  ┌────────────────────────────── select_hypothesis
-                  │                                     ↓
-                  │                                  reviewer ←──────────┐
-                  │                                     │                │
-                  │                 tool calls ─────────┤                │
-                  │                     ↓               │                │
-                  │                  ToolNode           │                │
-                  │                     ↓               │                │
-                  │              collect_evidence ──────┼────────────────┘
-                  │                                     ↓ no calls / limit
-                  │                              evaluate_evidence
-                  │                               ↙             ↘
-                  │                        store_finding       discard
-                  │                               ↘             ↙
-                  └──── more hypotheses ← advance_hypothesis
-                                                 ↓ no more
-                                            generate_review → END
+Fetch PR → Analyse diff → Load repository tree → Retrieve context → Form hypotheses
+                                                                        │
+                         ┌──────────────────────────────────────────────┘
+                         ▼
+        For each hypothesis (maximum 5):
+          Reviewer ⇄ Tools (read_file, search_code, find_references,
+                            run_test, run_static_analysis)
+                         ▼
+               Evaluate evidence → confirm or discard
+                         ▼
+                  Generate review
 ```
 
-Each review has at most five hypotheses. The model can request `read_file`,
-`search_code`, `find_references`, `run_test`, and `run_static_analysis` through
-LangGraph's `ToolNode`, then inspect
-their results before choosing another action. Each hypothesis has at most three
-model turns and six tool calls. Inspections use the PR's exact head or base SHA.
-Repository searches
-find candidate paths on GitHub's default branch; context retrieval reads up to
-three unique candidates at the PR head. Queries are limited to three and the
-overall repository tool budget is 30 calls. Large file contents are truncated
-and marked explicitly.
+## Key capabilities
 
-Tool batches are capped and counted before execution, including invalid requests.
-Repository identity and SHA selection are injected from graph state; the model
-only chooses a relative file path and `head` or `base`. Each hypothesis gets a
-fresh message history. Unknown tools and invalid arguments produce tool errors,
-and failed inspections cannot support confirmation. Search hits remain candidate
-paths, not evidence of code at the PR revision.
+- **Hypothesis-driven:** up to five candidate defects, each investigated with tools
+- **Evidence-gated:** only findings with valid citations reach the report
+- **Revision-pinned:** inspection and links use the PR's exact commit SHA
+- **Bounded:** 3 model turns and 6 tool calls per hypothesis, 30 tool calls per review
+- **Sandboxed (optional):** pytest and Ruff in locked-down, network-less Docker containers
+- **Transparent:** the UI shows each finding with its GitHub links and tool evidence
+- **Measurable:** evaluation harness comparing three review architectures
+- **Observable:** optional LangSmith tracing
+- **Deployable:** HTTPS, authentication and a dedicated sandbox worker
 
-The existing OpenAI client supplies tool calls through Chat Completions; a small
-adapter converts them to LangChain `AIMessage` objects and sends `ToolMessage`
-results back to the model. Structured hypotheses and evidence evaluations still
-use the Responses API. See the [LangGraph ToolNode reference](https://reference.langchain.com/python/langgraph.prebuilt/tool_node)
-for the tool execution and state injection APIs.
+## Technology stack
 
-The model evaluates numbered evidence and returns a confirmed, rejected, or
-inconclusive decision. Only confirmed findings with valid, successful evidence
-citations and the hypothesis's location reach the final review. Rejected and
-inconclusive hypotheses remain in graph state for inspection. Final review
-assembly uses stored findings without another model call.
+| Layer | Technologies |
+| --- | --- |
+| Agent orchestration | LangGraph (state graph, `ToolNode`), LangChain Core |
+| Language model | OpenAI API (Responses API with structured outputs and configurable reasoning effort) |
+| Backend | Python 3.13, FastAPI, Uvicorn, Pydantic, pydantic-settings, HTTPX |
+| Source control integration | GitHub REST API |
+| Frontend | React 19, TypeScript, Vite |
+| Code execution sandbox | Docker, pytest, Ruff |
+| Gateway and hosting | Caddy (automatic HTTPS, Basic authentication), Docker Compose, systemd (sandbox worker) |
+| Observability | LangSmith (optional) |
+| Testing | pytest, Vitest, React Testing Library, jsdom |
+| Tooling | uv (Python dependency management), npm |
 
-Verification includes optional Python tests and Ruff analysis in disposable Linux
-Docker containers. Execution is disabled by default. Each tool downloads a bounded
-GitHub ZIP at the selected head or base SHA, validates paths and file types, copies
-the snapshot into a container, and removes the container and local snapshot after
-execution. No repository code runs on the API host. No host directories, Docker
-socket, API credentials, or environment files are mounted or forwarded.
+## Getting started
 
-Containers use no network, a read-only filesystem, a non-root user, dropped
-capabilities, and no-new-privileges. Limits are 1 CPU, 512 MiB memory with no extra
-swap, 64 processes, 64 MiB writable `/tmp`, and 60 seconds per command. Output is
-bounded, snapshots allow at most 10,000 entries and 100 MiB extracted content,
-and at most two executions run concurrently per API process. Docker's isolation
-flags are documented in the [Docker container reference](https://docs.docker.com/reference/cli/docker/container/create/).
+### Prerequisites
 
-The model selects one existing file and `head` or `base`. The service fixes the
-commands to pytest or Ruff; it never installs PR dependencies or runs shell commands.
-Ruff ignores repository configuration. Pytest plugin autoload is disabled, but
-tests and conftest files remain untrusted code executed inside the sandbox.
-The initial image supports Python repositories using pytest and Ruff. Missing
-dependencies and unsupported projects produce incomplete evidence.
+- Python 3.13 or later and [uv](https://docs.astral.sh/uv/)
+- Node.js 22.12 or later
+- A GitHub token with read access to the repositories to be reviewed
+- An OpenAI API key
 
-Execution evidence records output, exit code, and timeout. `succeeded` means the
-command completed with exit code 0 or 1, not that tests passed. Collection errors,
-OOM kills, timeouts, disabled execution, and infrastructure failures cannot support
-confirmation. A test failure alone does not establish a regression.
-Reviews remain synchronous.
+### Installation and launch
 
-### Enable execution
+1. Create a `.env` file in the repository root:
 
-Install Docker with Linux-container support, then build the trusted image:
+   ```dotenv
+   github_token=...
+   openai_api_key=...
+   ```
 
-```powershell
+2. Build the web interface:
+
+   ```bash
+   cd frontend && npm ci && npm run build && cd ..
+   ```
+
+3. Start the API and web interface together:
+
+   ```bash
+   uv run python -m app.scripts.run_api --serve-ui --port 8001
+   ```
+
+- Open http://127.0.0.1:8001 and enter a PR URL, e.g. `https://github.com/owner/repo/pull/123`.
+- Reviews are synchronous and not persisted; keep the page open until the report appears.
+- For frontend development, run the API as above plus `npm run dev` in `frontend/`.
+- More detail: [docs/internals.md](docs/internals.md).
+
+## Configuration
+
+- Read from environment variables or a `.env` file in the repository root (case-insensitive).
+- Only `github_token` and `openai_api_key` are required for local use.
+
+| Setting | Default | Description |
+| --- | --- | --- |
+| `github_token` | — | **Required.** Reads PRs and repository files |
+| `openai_api_key` | — | **Required.** Model requests |
+| `verification_reasoning_effort` | `none` | Reviewer reasoning: `none`, `low`, `medium`, `high` |
+| `sandbox_enabled` | `false` | Enables test and lint execution |
+| `sandbox_image` | `code-review-sandbox:stage9` | Sandbox image |
+| `sandbox_worker_url`, `sandbox_worker_token` | — | Remote worker URL and token (32+ chars) |
+| `environment` | `development` | `production` enforces the checks below |
+| `api_access_token` | — | API bearer token (32+ chars, production) |
+| `public_origin` | — | Public HTTPS origin (production) |
+| `langsmith_tracing` | `false` | LangSmith tracing (traces include code) |
+| `langsmith_api_key`, `langsmith_project`, `langsmith_endpoint` | — | LangSmith connection |
+
+- Production startup fails if:
+  - the access token is missing or shorter than 32 characters
+  - the public origin is not a bare HTTPS origin
+  - sandbox execution is enabled without a dedicated worker
+
+## API
+
+The web interface uses a single endpoint, which can also be called directly. When
+`api_access_token` is set, add `-H "Authorization: Bearer <token>"`.
+
+```bash
+curl -s http://127.0.0.1:8001/api/v1/reviews \
+  -H "Content-Type: application/json" \
+  -d '{"repository": "owner/repo", "pull_request_number": 123}'
+```
+
+- The response contains:
+  - `pull_request`: PR metadata
+  - `findings`: confirmed issues, each with `file`, `line`, `severity`, `title` and `explanation`
+  - `tool_calls`: the evidence behind the findings
+
+| Status | Meaning |
+| --- | --- |
+| `200` | Review completed |
+| `400` | Malformed repository name |
+| `401` | Missing or invalid bearer token |
+| `404` | PR or repository not found or not readable |
+| `502` | GitHub API request failed |
+
+Interactive OpenAPI docs are served at `/docs` in development.
+
+## Sandboxed execution
+
+Disabled by default; verification then relies on reading and searching code. To enable
+pytest and Ruff runs, install Docker and build the trusted image:
+
+```bash
 docker build -t code-review-sandbox:stage9 sandbox
 ```
 
-Set `sandbox_enabled=true` in `.env` and restart the API. `sandbox_image` defaults
-to `code-review-sandbox:stage9`; use a trusted image (preferably a digest) when
-changing it. Runtime image pulling is disabled. Image builds may use network;
-review executions cannot. Docker must be available to the API process. Production
-deployments should use a dedicated worker host with a maintained Docker runtime;
-containers share the host kernel. Host crashes require operational cleanup of
-containers named `review-sandbox-*`.
+- Set `sandbox_enabled=true` and restart the API.
+- Images are never pulled at review time, and containers have no network access.
+- In production, use a dedicated worker via `sandbox_worker_url` instead of giving the API
+  Docker access.
 
-After building the image, run the optional local Docker smoke test. It uses a
-synthetic archive with no GitHub or OpenAI calls and checks non-root execution,
-blocked networking, read-only repository files, absent credentials, and captured
-test failures:
+## Evaluation
 
-```powershell
-$env:SANDBOX_SMOKE_TEST = "1"
-uv run python -m unittest discover -s tests -p test_sandbox.py -v
-Remove-Item Env:SANDBOX_SMOKE_TEST
+`evaluation/` holds 20 synthetic defective and 10 synthetic clean Python PRs, used to compare
+three review architectures:
+
+| Mode | Behaviour |
+| --- | --- |
+| `diff_only` | Structured review of the diff alone |
+| `context` | Context retrieval followed by a structured review |
+| `verification` | Full hypothesis and evidence graph |
+
+```bash
+# Offline wiring check (no external requests)
+uv run python -m app.scripts.evaluate
+
+# Live run against the OpenAI API (incurs cost)
+uv run python -m app.scripts.evaluate --live --limit 1 --output evaluation/results/live-smoke.json
 ```
 
-## Run locally
+- Findings are adjudicated manually against known defects, then rescored with `--score-report`.
+- Model quality has not yet been measured on this dataset.
+- Scoring and metrics: [evaluation guide](evaluation/README.md).
 
-Install dependencies with `uv sync`. Configure `github_token` and
-`openai_api_key` in `.env`, then run:
+## Testing
 
-```powershell
-uv run uvicorn app.main:app --reload
+```bash
+uv run --with pytest python -m pytest -q     # backend
+cd frontend && npm test                       # frontend
 ```
 
-If Windows reports `WinError 10013` or `WinError 10048` when binding the
-default port, use an available port such as 8001:
+Both suites use mocked services and make no external network requests.
 
-```powershell
-uv run python -m app.scripts.run_api --reload --port 8001
+## Deployment
+
+- `deploy/` provides a Docker Compose setup with two services:
+  - **Caddy gateway:** HTTPS, Basic authentication, serves the frontend, proxies `/api`
+  - **FastAPI service:** never exposed directly
+- The sandbox worker runs on a separate, optional Linux host managed by systemd.
+
+```bash
+cd deploy
+cp production.env.example production.env && chmod 600 production.env   # populate the values
+docker compose --env-file production.env up -d --build
 ```
 
-When using the React UI, start its development server in a second terminal
-with the matching backend address (restart Vite if it is already running):
+## Security
 
-```powershell
-cd frontend
-$env:API_PROXY_TARGET = "http://127.0.0.1:8001"
-npm run dev
+- Secrets are supplied exclusively through environment variables and are never included in
+  the frontend build.
+- In production, the API requires a bearer token, which the gateway injects server-side.
+
+## Troubleshooting
+
+| Symptom | Resolution |
+| --- | --- |
+| Validation error on startup | Missing setting or failed production check; the error names it |
+| `Build the local UI first` | Run `npm ci && npm run build` in `frontend/` |
+| `requires environment=development` | `--serve-ui` is local-only; use `deploy/` for production |
+| `404 Pull request or repository not found` | Check token access and the PR number |
+| Slow reviews | Expected: reviews are synchronous; keep the page open |
+| Execution evidence always incomplete | Enable the sandbox, build the image, check Docker access |
+
+## Project structure
+
+```text
+app/graph/       LangGraph workflow (nodes, routing, state)
+app/tools/       Repository and verification tools available to the model
+app/services/    GitHub, OpenAI, context and sandbox services
+app/evaluation/  Evaluation dataset loader, runner and metrics
+frontend/        React + TypeScript web interface (Vite)
+deploy/          Docker Compose, Caddy, Dockerfiles and sandbox worker unit
+sandbox/         Image for isolated pytest and Ruff runs
+docs/            Internals and operations documentation
 ```
 
-Submit `POST /api/v1/reviews` with:
+## Documentation
 
-```json
-{"repository": "owner/repository", "pull_request_number": 123}
-```
-
-The response contains PR metadata and the verified findings.
-
-### LangSmith tracing
-
-Tracing is off by default. To send each review to LangSmith, add to `.env`:
-
-```
-langsmith_tracing=true
-langsmith_api_key=lsv2_...
-langsmith_project=code-review-agent
-```
-
-Set `langsmith_endpoint` as well for a self-hosted or EU instance. Each API
-review appears as a `pull_request_review` trace tagged with the repository and
-PR number, with a child run per graph node, tool call, and OpenAI request
-(including token usage). Live evaluation runs are tagged `evaluation` with the
-case ID and mode; offline wiring checks are never traced. Traces contain PR
-diffs and repository content, so only enable this for repositories you may
-share with LangSmith.
-
-Run mocked graph tests (no external API requests):
-
-```powershell
-uv run python -m unittest discover -s tests -v
-```
+- [Internals and operations](docs/internals.md)
+- [Evaluation guide](evaluation/README.md)

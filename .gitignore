@@ -23,3 +23,9 @@ deploy/*.env
 deploy/backups/
 deploy/secrets/
 .npm-cache/
+
+# Local planning and deployment notes (not published)
+*PLAN*.md
+*plan*.md
+*Plan*.md
+deploy/README.md
