@@ -13,7 +13,7 @@ An agentic, evidence-driven reviewer for GitHub pull requests.
 ![React](https://img.shields.io/badge/React-TypeScript-3178C6?logo=react&logoColor=white)
 
 <p align="center">
-  <img src="frontend/dark-theme-preview.jpg" alt="Review workspace showing the pipeline from fetching a PR to the final report" width="420">
+  <img src="frontend/dark-theme-preview.jpg" alt="Code Review Agent UI with the git flow diagram, PR input form, and an example evidence-backed finding" width="760">
 </p>
 
 **Contents:** [Overview](#overview) · [Getting started](#getting-started) ·
