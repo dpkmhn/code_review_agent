@@ -106,7 +106,6 @@ Fetch PR → Analyse diff → Load repository tree → Retrieve context → Form
 - Open http://127.0.0.1:8001 and enter a PR URL, e.g. `https://github.com/owner/repo/pull/123`.
 - Reviews are synchronous and not persisted; keep the page open until the report appears.
 - For frontend development, run the API as above plus `npm run dev` in `frontend/`.
-- More detail: [docs/internals.md](docs/internals.md).
 
 ## Configuration
 
@@ -244,10 +243,8 @@ app/evaluation/  Evaluation dataset loader, runner and metrics
 frontend/        React + TypeScript web interface (Vite)
 deploy/          Docker Compose, Caddy, Dockerfiles and sandbox worker unit
 sandbox/         Image for isolated pytest and Ruff runs
-docs/            Internals and operations documentation
 ```
 
 ## Documentation
 
-- [Internals and operations](docs/internals.md)
 - [Evaluation guide](evaluation/README.md)
