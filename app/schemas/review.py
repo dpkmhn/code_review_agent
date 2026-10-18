@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field
 from app.schemas.ai_review import ReviewFinding
 from app.schemas.github import PullRequestData
+from app.schemas.specialist import Specialist
 from app.schemas.tool_call import ToolCallRecord
 
 # Incoming API payload validation schema
@@ -14,3 +15,4 @@ class ReviewResponse(BaseModel):
     pull_request: PullRequestData              # Nested structural PR content payload
     findings: list[ReviewFinding]              # Array of detected code vulnerabilities/bugs
     tool_calls: list[ToolCallRecord] = Field(default_factory=list)  # Tool evidence behind the findings
+    specialists: list[Specialist] = Field(default_factory=list)      # Specialist agents the supervisor ran

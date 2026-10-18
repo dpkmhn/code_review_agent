@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, patch
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.graph import END, START, StateGraph
 
-from app.graph.state import ReviewState
+from app.graph.state import SpecialistState
 from app.services.sandbox_service import (
     ExecutionResult, SandboxService, extract_snapshot, relative_path,
     docker_command, OUTPUT_LIMIT,
@@ -171,7 +171,7 @@ class SandboxTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_tool_node_retains_failed_test_execution_artifact(self):
         node = build_tool_node(build_verification_tools(self.github))
-        builder = StateGraph(ReviewState)
+        builder = StateGraph(SpecialistState)
         builder.add_node("tools", node)
         builder.add_edge(START, "tools")
         builder.add_edge("tools", END)

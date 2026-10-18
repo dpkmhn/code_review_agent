@@ -3,10 +3,11 @@ import httpx
 from langchain_core.messages import HumanMessage, RemoveMessage, ToolMessage
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
-from app.graph.state import ReviewState
+from app.graph.state import ReviewState, SpecialistState
 from app.github_client import GitHubClient
 from app.schemas.ai_review import ReviewResult
 from app.schemas.hypothesis import EvidenceEvaluation, VerificationEvidence
+from app.schemas.specialist import SPECIALISTS
 from app.schemas.tool_call import ToolCallRecord
 from app.services.context_service import ContextService
 from app.services.llm_review_service import LLMReviewService
@@ -24,6 +25,7 @@ MAX_CONTEXT_FILES = 3
 MAX_TOOL_CALLS = 30
 MAX_VERIFICATION_ROUNDS = 3
 MAX_VERIFICATION_TOOL_CALLS = 6
+SEVERITY_RANK = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 
 
 async def analyse_diff_node(state: ReviewState) -> dict:
@@ -35,16 +37,11 @@ async def analyse_diff_node(state: ReviewState) -> dict:
         "relevant_context": [],
         "tree_evidence": None,
         "tree_context": "",
-        "hypotheses": [],
-        "hypothesis_index": 0,
-        "evidence": [],
+        "specialists": [],
         "evaluations": [],
         "findings": [],
         "tool_calls": 0,
         "tool_records": [],
-        "messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES)],
-        "verification_rounds": 0,
-        "verification_tool_calls": 0,
     }
 
 
@@ -138,17 +135,50 @@ async def retrieve_context_node(state: ReviewState, *, repository=None) -> dict:
     return {"relevant_context": context, "tool_calls": tool_calls, "tool_records": records}
 
 
-async def form_hypotheses_node(state: ReviewState, *, llm=None) -> dict:
+async def supervisor_node(state: ReviewState, *, llm=None) -> dict:
+    selection = await (llm or review_service).select_specialists(pull_request=state["pull_request"])
+    # Correctness is the baseline review; the supervisor can only add specialists.
+    chosen = {"correctness", *selection.specialists}
+    return {"specialists": [name for name in SPECIALISTS if name in chosen]}
+
+
+def specialist_tasks(state: ReviewState) -> list[dict]:
+    """Initial state per specialist, splitting what remains of the global tool budget."""
+    specialists = state["specialists"]
+    share, extra = divmod(max(0, MAX_TOOL_CALLS - state["tool_calls"]), len(specialists))
+    return [{
+        "pull_request": state["pull_request"], "relevant_context": state["relevant_context"],
+        "tree_evidence": state.get("tree_evidence"), "tree_context": state.get("tree_context", ""),
+        "specialist": specialist, "tool_budget": share + (index < extra),
+        "hypotheses": [], "hypothesis_index": 0, "evidence": [], "evaluations": [],
+        "findings": [], "tool_calls": 0, "tool_records": [], "messages": [],
+        "verification_rounds": 0, "verification_tool_calls": 0,
+    } for index, specialist in enumerate(specialists)]
+
+
+def build_specialist_node(specialist_graph):
+    async def specialist_node(task: SpecialistState) -> dict:
+        # Each specialist is its own agent graph; only its outcome reaches the parent.
+        result = await specialist_graph.ainvoke(task, {
+            "run_name": f"{task['specialist']}_specialist", "tags": [task["specialist"]],
+        })
+        run = {key: value for key, value in result.items() if key not in ("messages", "pull_request")}
+        return {"specialist_runs": [run]}
+    return specialist_node
+
+
+async def form_hypotheses_node(state: SpecialistState, *, llm=None) -> dict:
     tree_context = state.get("tree_context")
     result = await (llm or review_service).form_hypotheses(
         pull_request=state["pull_request"],
         relevant_context=([tree_context] if tree_context else []) + state["relevant_context"],
+        specialist=state["specialist"],
     )
     patched_files = {file.filename for file in state["pull_request"].files if file.patch}
     return {"hypotheses": [item for item in result.hypotheses if item.file in patched_files]}
 
 
-async def select_hypothesis_node(state: ReviewState) -> dict:
+async def select_hypothesis_node(state: SpecialistState) -> dict:
     hypothesis = state["hypotheses"][state["hypothesis_index"]]
     pr = state["pull_request"]
     evidence = [VerificationEvidence(
@@ -166,20 +196,26 @@ async def select_hypothesis_node(state: ReviewState) -> dict:
             f"Earlier repository context: {state['relevant_context']}\n"
             f"Limits: {MAX_VERIFICATION_ROUNDS} tool rounds, "
             f"{MAX_VERIFICATION_TOOL_CALLS} calls per hypothesis, "
-            f"{MAX_TOOL_CALLS - state['tool_calls']} remaining repository calls."
+            f"{state['tool_budget'] - state['tool_calls']} remaining repository calls."
         ))],
         "verification_rounds": 0,
         "verification_tool_calls": 0,
     }
 
 
-async def reviewer_node(state: ReviewState, *, llm=None, tools=None) -> dict:
-    remaining = min(MAX_TOOL_CALLS - state["tool_calls"],
+def _call_id(state: SpecialistState, number: int) -> str:
+    # Prefixed so records stay unique once parallel specialists are merged.
+    return f"{state['specialist']}-verification-{number}"
+
+
+async def reviewer_node(state: SpecialistState, *, llm=None, tools=None) -> dict:
+    remaining = min(state["tool_budget"] - state["tool_calls"],
                     MAX_VERIFICATION_TOOL_CALLS - state["verification_tool_calls"])
     if remaining <= 0 or state["verification_rounds"] >= MAX_VERIFICATION_ROUNDS:
         return {}  # Conditional routing sends existing evidence to evaluation.
     message = await (llm or review_service).request_verification_tools(
         messages=state["messages"], tools=verification_tools if tools is None else tools,
+        specialist=state["specialist"],
     )
     # Reserve the entire batch before ToolNode starts parallel execution. Count
     # invalid requests too, so repeated errors cannot bypass the budget.
@@ -188,8 +224,8 @@ async def reviewer_node(state: ReviewState, *, llm=None, tools=None) -> dict:
     records = list(state.get("tool_records", []))
     for index, call in enumerate(calls):
         records.append(ToolCallRecord(
-            call_id=f"verification-{state['tool_calls'] + index + 1}",
-            name=call["name"], arguments=call["args"],
+            call_id=_call_id(state, state["tool_calls"] + index + 1),
+            name=call["name"], arguments=call["args"], specialist=state["specialist"],
         ))
     return {"messages": [message], "tool_calls": state["tool_calls"] + len(calls),
             "tool_records": records,
@@ -197,7 +233,7 @@ async def reviewer_node(state: ReviewState, *, llm=None, tools=None) -> dict:
             "verification_rounds": state["verification_rounds"] + 1}
 
 
-async def collect_evidence_node(state: ReviewState) -> dict:
+async def collect_evidence_node(state: SpecialistState) -> dict:
     evidence = list(state["evidence"])
     records = list(state.get("tool_records", []))
     # Only the newly completed batch is appended, not previous tool results.
@@ -216,7 +252,7 @@ async def collect_evidence_node(state: ReviewState) -> dict:
     record_indices = {record.call_id: index for index, record in enumerate(records)}
     for offset, call in enumerate(calls):
         message = messages_by_id.get(call["id"])
-        record_index = record_indices.get(f"verification-{first_call + offset}")
+        record_index = record_indices.get(_call_id(state, first_call + offset))
         if message is not None and record_index is not None:
             records[record_index] = records[record_index].model_copy(update={
                 "status": "completed", "result": bounded_content(str(message.content)),
@@ -225,9 +261,10 @@ async def collect_evidence_node(state: ReviewState) -> dict:
     return {"evidence": evidence, "tool_records": records}
 
 
-async def evaluate_evidence_node(state: ReviewState, *, llm=None) -> dict:
+async def evaluate_evidence_node(state: SpecialistState, *, llm=None) -> dict:
     evaluation = await (llm or review_service).evaluate_evidence(
         hypothesis=state["current_hypothesis"], evidence=state["evidence"],
+        specialist=state["specialist"],
     )
     if evaluation.status == "confirmed":
         finding = evaluation.finding
@@ -245,9 +282,11 @@ async def evaluate_evidence_node(state: ReviewState, *, llm=None) -> dict:
     return {"evaluation": evaluation, "evaluations": state["evaluations"] + [evaluation]}
 
 
-async def store_finding_node(state: ReviewState) -> dict:
+async def store_finding_node(state: SpecialistState) -> dict:
     finding = state["evaluation"].finding
     findings = list(state["findings"])
+    if finding is not None:
+        finding = finding.model_copy(update={"category": state["specialist"]})
     if finding is not None and not any(
         (existing.file, existing.line, existing.title) == (finding.file, finding.line, finding.title)
         for existing in findings
@@ -256,15 +295,28 @@ async def store_finding_node(state: ReviewState) -> dict:
     return {"findings": findings}
 
 
-async def discard_node(state: ReviewState) -> dict:
+async def discard_node(state: SpecialistState) -> dict:
     return {}
 
 
-async def advance_hypothesis_node(state: ReviewState) -> dict:
+async def advance_hypothesis_node(state: SpecialistState) -> dict:
     return {"hypothesis_index": state["hypothesis_index"] + 1}
 
 
 async def generate_review_node(state: ReviewState) -> dict:
     # Assemble only verified findings; a final free-form model call could add
     # claims that have never passed through the verification loop.
-    return {"review": ReviewResult(findings=state["findings"])}
+    runs = sorted(state["specialist_runs"], key=lambda run: SPECIALISTS.index(run["specialist"]))
+    # Specialists may confirm the same defect; keep one per location, the most severe.
+    merged = {}
+    for finding in (finding for run in runs for finding in run["findings"]):
+        existing = merged.get((finding.file, finding.line))
+        if existing is None or SEVERITY_RANK[finding.severity] > SEVERITY_RANK[existing.severity]:
+            merged[(finding.file, finding.line)] = finding
+    findings = list(merged.values())
+    return {
+        "review": ReviewResult(findings=findings), "findings": findings,
+        "evaluations": [item for run in runs for item in run["evaluations"]],
+        "tool_calls": state["tool_calls"] + sum(run["tool_calls"] for run in runs),
+        "tool_records": state["tool_records"] + [record for run in runs for record in run["tool_records"]],
+    }

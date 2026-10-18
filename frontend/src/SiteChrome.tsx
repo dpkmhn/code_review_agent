@@ -59,7 +59,7 @@ export function SiteFooter() {
     <div className="footer-grid">
       <div className="footer-brand">
         <a className="brand" href="/"><LogoMark /><span className="brand-text"><strong>Code Review Agent</strong><small>Agentic PR review</small></span></a>
-        <p>Investigates pull requests with repository context and verifies each claim before it becomes a finding.</p>
+        <p>Specialist agents investigate pull requests with repository context, and a shared judge verifies each claim before it becomes a finding.</p>
       </div>
       <div><h2>Product</h2><ul>
         <li><a href="#review-console">Start a review</a></li>

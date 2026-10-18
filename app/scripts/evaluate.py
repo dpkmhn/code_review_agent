@@ -11,6 +11,7 @@ from pathlib import Path
 
 from app.evaluation.dataset import load_dataset
 from app.evaluation.metrics import summarize
+from app.schemas.specialist import SPECIALISTS
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -82,6 +83,8 @@ def main():
             "repository_search": "literal case-insensitive search on base snapshot",
             "sandbox_execution": False, "runs": runs, "summary": summarize(cases, runs, labels),
             "package_versions": {name: version(name) for name in ("openai", "langgraph", "langchain-core")},
+            # Hypotheses are per specialist; the tool call budget is shared across them.
+            "specialists": list(SPECIALISTS),
             "limits": {"hypotheses": 5, "context_queries": 3, "context_files": 3,
                        "tool_calls": 30, "verification_rounds": 3, "calls_per_hypothesis": 6},
         }

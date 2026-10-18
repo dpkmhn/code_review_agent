@@ -1,12 +1,20 @@
 import type { CSSProperties } from 'react';
-import type { Finding, Review, ReviewStatus, Severity } from './types';
+import type { Finding, Review, ReviewStatus, Severity, Specialist } from './types';
 
 export const SEVERITIES: Severity[] = ['critical', 'high', 'medium', 'low'];
+// Same order as the backend fan-out.
+export const SPECIALISTS: Specialist[] = ['correctness', 'security', 'performance'];
+
+const SPECIALIST_INFO: Record<Specialist, { mark: string; focus: string }> = {
+  correctness: { mark: 'C', focus: 'Logic, edge cases, regressions' },
+  security: { mark: 'S', focus: 'Injection, auth, secrets' },
+  performance: { mark: 'P', focus: 'Complexity, queries, blocking I/O' },
+};
 
 // Mirrors the backend graph; the API does not stream per-stage progress, so stages are shown as a whole.
 const STAGES: [icon: string, label: string][] = [
   ['⇣', 'Fetch PR'], ['±', 'Analyse diff'], ['⌕', 'Context'],
-  ['?', 'Hypotheses'], ['⚙', 'Verify'], ['✓', 'Report'],
+  ['⑂', 'Supervisor'], ['⚙', 'Specialists'], ['✓', 'Report'],
 ];
 
 export function parsePullRequestLink(value: string): { repository: string; number: string } | null {
@@ -73,6 +81,33 @@ export function Scorecard({ review, filter, onFilter }: ScorecardProps) {
   </div>;
 }
 
+interface SpecialistPanelProps { review: Review; filter: Specialist | null; onFilter: (specialist: Specialist | null) => void }
+
+export function SpecialistPanel({ review, filter, onFilter }: SpecialistPanelProps) {
+  const ran = new Set(review.specialists ?? []);
+  const tools = review.tool_calls ?? [];
+  return <section className="agents" aria-labelledby="agents-heading">
+    <div className="agents-head"><h3 id="agents-heading">Specialist agents</h3>
+      <span>Supervisor dispatched {ran.size} of {SPECIALISTS.length} · one shared evidence judge</span></div>
+    <div className="agent-tiles">
+      {SPECIALISTS.map((name) => {
+        const findings = review.findings.filter((finding) => finding.category === name).length;
+        const calls = tools.filter((tool) => tool.specialist === name).length;
+        const { mark, focus } = SPECIALIST_INFO[name];
+        return <button type="button" key={name} className={`agent-tile ${ran.has(name) ? 'ran' : 'skipped'}`}
+          aria-pressed={filter === name} disabled={!findings} onClick={() => onFilter(filter === name ? null : name)}>
+          <span className="agent-top"><span className="agent-mark" aria-hidden="true">{mark}</span>
+            <strong>{name}</strong><span className="agent-state">{ran.has(name) ? 'ran' : 'skipped'}</span></span>
+          <small>{focus}</small>
+          <span className="agent-stats">{ran.has(name)
+            ? `${findings} finding${findings === 1 ? '' : 's'} · ${calls} tool call${calls === 1 ? '' : 's'}`
+            : 'Skipped by the supervisor'}</span>
+        </button>;
+      })}
+    </div>
+  </section>;
+}
+
 export function SamplePreview() {
   return <div className="sample" aria-label="Example review, not a live result">
     <div className="sample-head"><span className="panel-label">EXAMPLE</span><code>auth/login.py</code></div>
@@ -83,7 +118,7 @@ export function SamplePreview() {
 <span className="ctx">def get_token(user):</span>
 <span className="del">-    return jwt.encode({'{'}"user": user{'}'}, "hardcoded_secret")</span>
 <span className="add">+    return jwt.encode({'{'}"user": user{'}'}, os.environ["JWT_SECRET"])</span></pre>
-    <div className="sample-finding"><span className="severity medium">medium</span>
+    <div className="sample-finding"><span className="finding-tags"><span className="severity medium">medium</span><span className="category">correctness</span></span>
       <div><strong>Missing secret raises at request time</strong>
         <p><code>os.environ["JWT_SECRET"]</code> throws <code>KeyError</code> on every login when unset. Verified by reading the settings loader.</p></div></div>
   </div>;

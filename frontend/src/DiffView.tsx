@@ -63,7 +63,7 @@ function FileDiff({ file, findings, open }: { file: PullRequestFile; findings: F
 
 function Annotation({ finding }: { finding: Finding }) {
   return <div className={`diff-note sev-${finding.severity}`}>
-    <span className={`severity ${finding.severity}`}>{finding.severity}</span>
+    <span className="finding-tags"><span className={`severity ${finding.severity}`}>{finding.severity}</span>{finding.category && <span className="category">{finding.category}</span>}</span>
     <div><strong>{finding.title}</strong>{finding.line == null && <small> · no line given</small>}<p>{finding.explanation}</p></div>
   </div>;
 }

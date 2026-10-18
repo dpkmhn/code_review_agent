@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import httpx
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from pydantic import ValidationError
 
 from app.graph import nodes
@@ -15,6 +15,7 @@ from app.schemas.github import PullRequestData, PullRequestFile
 from app.schemas.hypothesis import (
     BugHypothesis, EvidenceEvaluation, HypothesisResult, VerificationStep,
 )
+from app.schemas.specialist import SpecialistSelection
 from app.services.context_service import ContextService
 from app.services.sandbox_service import ExecutionResult, SandboxService
 
@@ -48,18 +49,23 @@ class ReviewGraphTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def invoke(self, hypotheses=(), evaluations=(), context=None, read=None, reviewer=None,
-                     search=None):
+                     search=None, specialists=()):
         with ExitStack() as stack:
+            self.supervisor_mock = stack.enter_context(patch.object(
+                nodes.review_service, "select_specialists", AsyncMock(return_value=SpecialistSelection(
+                    specialists=list(specialists), reason="Scoped change")),
+            ))
             self.context_mock = stack.enter_context(patch.object(
                 nodes.context_service, "analyse_context_need", AsyncMock(return_value=context or
                     ContextRequest(needs_context=False, reason="Self-contained")),
             ))
             self.hypotheses_mock = stack.enter_context(patch.object(
-                nodes.review_service, "form_hypotheses",
-                AsyncMock(return_value=HypothesisResult(hypotheses=list(hypotheses))),
+                nodes.review_service, "form_hypotheses", hypotheses if callable(hypotheses)
+                else AsyncMock(return_value=HypothesisResult(hypotheses=list(hypotheses))),
             ))
             self.evaluate_mock = stack.enter_context(patch.object(
-                nodes.review_service, "evaluate_evidence", AsyncMock(side_effect=list(evaluations)),
+                nodes.review_service, "evaluate_evidence", evaluations if callable(evaluations)
+                else AsyncMock(side_effect=list(evaluations)),
             ))
             self.read_mock = stack.enter_context(patch.object(
                 nodes.github_client, "read_file", read or AsyncMock(return_value="return value"),
@@ -79,7 +85,10 @@ class ReviewGraphTests(unittest.IsolatedAsyncioTestCase):
                                  } for step_index, step in enumerate(hypothesis.verification_plan)]),
                                      AIMessage(content="Enough evidence"))]),
             ))
-            return await review_graph.ainvoke({"pull_request": self.pull_request})
+            result = await review_graph.ainvoke({"pull_request": self.pull_request})
+        self.runs = {run["specialist"]: run for run in result["specialist_runs"]}
+        self.run = self.runs.get("correctness")
+        return result
 
     async def test_no_hypotheses_generates_empty_review(self):
         result = await self.invoke()
@@ -100,6 +109,7 @@ class ReviewGraphTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("return value", result["relevant_context"][1])
         self.hypotheses_mock.assert_awaited_once_with(
             pull_request=self.pull_request, relevant_context=result["relevant_context"],
+            specialist="correctness",
         )
         self.assertEqual(result["tool_calls"], 2)
         self.assertEqual([record.name for record in result["tool_records"]], ["search_code", "read_file"])
@@ -123,12 +133,12 @@ class ReviewGraphTests(unittest.IsolatedAsyncioTestCase):
     async def test_confirmed_finding_uses_head_and_base_evidence(self):
         result = await self.invoke([self.hypothesis()], [self.evaluation()])
         self.assertEqual(len(result["review"].findings), 1)
-        self.assertEqual([item.ref for item in result["evidence"]], ["head", "head", "base"])
-        self.assertEqual(result["hypothesis_index"], 1)
+        self.assertEqual([item.ref for item in self.run["evidence"]], ["head", "head", "base"])
+        self.assertEqual(self.run["hypothesis_index"], 1)
         self.assertEqual(result["tool_calls"], 2)
         self.assertEqual([record.evidence.ref for record in result["tool_records"]], ["head", "base"])
         self.assertTrue(all(record.status == "completed" for record in result["tool_records"]))
-        self.assertEqual(self.evaluate_mock.await_args.kwargs["evidence"], result["evidence"])
+        self.assertEqual(self.evaluate_mock.await_args.kwargs["evidence"], self.run["evidence"])
 
     async def test_mixed_outcomes_advance_and_only_store_confirmed(self):
         result = await self.invoke(
@@ -138,7 +148,7 @@ class ReviewGraphTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([finding.line for finding in result["review"].findings], [2])
         self.assertEqual([item.status for item in result["evaluations"]],
                          ["rejected", "confirmed", "inconclusive"])
-        self.assertEqual(result["hypothesis_index"], 3)
+        self.assertEqual(self.run["hypothesis_index"], 3)
         self.assertEqual(self.evaluate_mock.await_count, 3)
 
     async def test_five_hypotheses_terminate_without_recursion_error(self):
@@ -147,7 +157,7 @@ class ReviewGraphTests(unittest.IsolatedAsyncioTestCase):
             [self.evaluation(line=line) for line in range(1, 6)],
         )
         self.assertEqual(len(result["review"].findings), 5)
-        self.assertEqual(result["hypothesis_index"], 5)
+        self.assertEqual(self.run["hypothesis_index"], 5)
         records = result["tool_records"]
         self.assertEqual(len(records), 10)
         self.assertEqual(len({record.call_id for record in records}), 10)
@@ -160,7 +170,7 @@ class ReviewGraphTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(failure=type(failure).__name__):
                 result = await self.invoke([self.hypothesis()], [self.evaluation(indices=[1])],
                                            read=AsyncMock(side_effect=failure))
-                self.assertFalse(result["evidence"][1].succeeded)
+                self.assertFalse(self.run["evidence"][1].succeeded)
                 self.assertEqual(result["evaluations"][0].status, "inconclusive")
                 self.assertEqual(result["review"].findings, [])
 
@@ -174,8 +184,8 @@ class ReviewGraphTests(unittest.IsolatedAsyncioTestCase):
         )):
             result = await self.invoke([self.hypothesis()], [self.evaluation(indices=[1])],
                                        reviewer=reviewer)
-        self.assertEqual(result["evidence"][1].source, "run_test")
-        self.assertFalse(result["evidence"][1].succeeded)
+        self.assertEqual(self.run["evidence"][1].source, "run_test")
+        self.assertFalse(self.run["evidence"][1].succeeded)
         self.assertEqual(result["review"].findings, [])
 
     async def test_invalid_evidence_index_is_discarded(self):
@@ -220,8 +230,8 @@ class ReviewGraphTests(unittest.IsolatedAsyncioTestCase):
     async def test_tool_budget_prevents_further_reads(self):
         with patch.object(nodes.review_service, "request_verification_tools", AsyncMock()) as reviewer:
             result = await nodes.reviewer_node({
-                "tool_calls": nodes.MAX_TOOL_CALLS, "verification_tool_calls": 0,
-                "verification_rounds": 0,
+                "specialist": "correctness", "tool_budget": 10, "tool_calls": 10,
+                "verification_tool_calls": 0, "verification_rounds": 0,
             })
         reviewer.assert_not_awaited()
         self.assertEqual(result, {})
@@ -231,7 +241,7 @@ class ReviewGraphTests(unittest.IsolatedAsyncioTestCase):
                                    reviewer=AsyncMock(return_value=AIMessage(content="Diff is enough")))
         self.read_mock.assert_not_awaited()
         self.assertEqual(result["tool_calls"], 0)
-        self.assertEqual(len(result["evidence"]), 1)
+        self.assertEqual(len(self.run["evidence"]), 1)
 
     async def test_search_then_read_uses_tool_results_in_next_round(self):
         reviewer = AsyncMock(side_effect=[
@@ -243,7 +253,7 @@ class ReviewGraphTests(unittest.IsolatedAsyncioTestCase):
         ])
         result = await self.invoke([self.hypothesis()], [self.evaluation(indices=[1])], reviewer=reviewer)
         self.assertIn("candidate_paths_default_branch", reviewer.await_args_list[1].kwargs["messages"][-1].content)
-        self.assertEqual([item.source for item in result["evidence"]], ["diff", "read_file"])
+        self.assertEqual([item.source for item in self.run["evidence"]], ["diff", "read_file"])
         self.assertEqual(result["tool_calls"], 2)
 
     async def test_unknown_and_invalid_tools_do_not_execute_or_create_evidence(self):
@@ -257,7 +267,7 @@ class ReviewGraphTests(unittest.IsolatedAsyncioTestCase):
         self.read_mock.assert_not_awaited()
         self.search_mock.assert_not_awaited()
         self.assertEqual(result["tool_calls"], 4)
-        self.assertEqual(len(result["evidence"]), 1)
+        self.assertEqual(len(self.run["evidence"]), 1)
         self.assertEqual(result["review"].findings, [])
 
     async def test_oversized_batch_is_reserved_before_tool_execution(self):
@@ -279,10 +289,10 @@ class ReviewGraphTests(unittest.IsolatedAsyncioTestCase):
                 "id": f"read-{count}", "name": "read_file",
                 "args": {"path": "helper.py", "revision": "head"},
             }])
-        result = await self.invoke([self.hypothesis()], [self.evaluation()],
-                                   reviewer=AsyncMock(side_effect=request))
+        await self.invoke([self.hypothesis()], [self.evaluation()],
+                          reviewer=AsyncMock(side_effect=request))
         self.assertEqual(count, nodes.MAX_VERIFICATION_ROUNDS)
-        self.assertEqual(len(result["evidence"]), 1 + count)
+        self.assertEqual(len(self.run["evidence"]), 1 + count)
 
     async def test_global_budget_caps_batches_across_five_hypotheses(self):
         reviewer = AsyncMock(return_value=AIMessage(content="", tool_calls=[{
@@ -297,9 +307,61 @@ class ReviewGraphTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(result["tool_calls"], nodes.MAX_TOOL_CALLS)
         self.assertEqual(self.read_mock.await_count, 29)  # One context read + 28 verification reads.
-        self.assertEqual(len(result["evidence"]), 5)  # Last hypothesis has four remaining calls.
+        self.assertEqual(len(self.run["evidence"]), 5)  # Last hypothesis has four remaining calls.
         for call in reviewer.await_args_list:
             self.assertEqual(len(call.kwargs["messages"]), 1)  # Fresh per hypothesis.
+
+    async def test_supervisor_always_runs_correctness_and_adds_selected_specialists(self):
+        result = await self.invoke(specialists=["performance"])
+        self.assertEqual(result["specialists"], ["correctness", "performance"])
+        self.assertEqual(sorted(call.kwargs["specialist"] for call in self.hypotheses_mock.await_args_list),
+                         ["correctness", "performance"])
+
+    async def test_remaining_tool_budget_is_split_across_specialists(self):
+        result = await self.invoke(specialists=["security", "performance"], context=ContextRequest(
+            needs_context=True, reason="Check callers", queries=["helper"],
+        ))
+        self.assertEqual(result["tool_calls"], 2)
+        budgets = {name: run["tool_budget"] for name, run in self.runs.items()}
+        self.assertEqual(budgets, {"correctness": 10, "security": 9, "performance": 9})
+
+    async def test_parallel_specialists_merge_verified_findings(self):
+        by_specialist = {
+            "correctness": [self.hypothesis(1)],
+            "security": [self.hypothesis(1), self.hypothesis(2)],
+            "performance": [self.hypothesis(3)],
+        }
+        severities = {"correctness": "medium", "security": "critical", "performance": "low"}
+
+        async def hypotheses(*, pull_request, relevant_context, specialist):
+            return HypothesisResult(hypotheses=by_specialist[specialist])
+
+        async def evaluate(*, hypothesis, evidence, specialist):
+            evaluation = self.evaluation(line=hypothesis.line, indices=[1])
+            return evaluation.model_copy(update={"finding": evaluation.finding.model_copy(update={
+                "severity": severities[specialist], "title": f"{specialist} {hypothesis.line}"})})
+
+        async def reviewer(*, messages, tools, specialist):
+            # Read once, then stop: deterministic regardless of parallel scheduling.
+            if isinstance(messages[-1], ToolMessage):
+                return AIMessage(content="Enough evidence")
+            return AIMessage(content="", tool_calls=[{"id": f"{specialist}-read", "name": "read_file",
+                                                      "args": {"path": "helper.py", "revision": "head"}}])
+
+        result = await self.invoke(AsyncMock(side_effect=hypotheses), AsyncMock(side_effect=evaluate),
+                                   reviewer=AsyncMock(side_effect=reviewer),
+                                   specialists=["security", "performance"])
+        findings = result["review"].findings
+        # Line 1 was confirmed twice; the more severe security finding wins.
+        self.assertEqual([(item.line, item.category, item.severity) for item in findings],
+                         [(1, "security", "critical"), (2, "security", "critical"), (3, "performance", "low")])
+        self.assertEqual(len(result["evaluations"]), 4)
+        self.assertEqual(result["tool_calls"], 4)
+        call_ids = [record.call_id for record in result["tool_records"]]
+        self.assertEqual(len(set(call_ids)), 4)
+        self.assertEqual(sorted(record.specialist for record in result["tool_records"]),
+                         ["correctness", "performance", "security", "security"])
+        self.assertTrue(all(record.status == "completed" for record in result["tool_records"]))
 
     async def test_missing_structured_outputs_have_clear_errors(self):
         with patch.object(nodes.review_service.client.responses, "parse",
@@ -308,6 +370,8 @@ class ReviewGraphTests(unittest.IsolatedAsyncioTestCase):
                 await nodes.review_service.form_hypotheses(self.pull_request, [])
             with self.assertRaisesRegex(ValueError, "structured evidence evaluation"):
                 await nodes.review_service.evaluate_evidence(self.hypothesis(), [])
+            with self.assertRaisesRegex(ValueError, "structured specialist selection"):
+                await nodes.review_service.select_specialists(self.pull_request)
         with patch.object(nodes.context_service.client.responses, "parse",
                           AsyncMock(return_value=SimpleNamespace(output_parsed=None))):
             with self.assertRaisesRegex(ValueError, "structured context request"):

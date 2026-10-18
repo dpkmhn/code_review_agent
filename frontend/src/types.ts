@@ -2,6 +2,7 @@
 
 export type Severity = 'low' | 'medium' | 'high' | 'critical';
 export type ReviewStatus = 'pending' | 'running' | 'reviewed' | 'failed';
+export type Specialist = 'correctness' | 'security' | 'performance';
 
 export interface PullRequestFile {
   filename: string;
@@ -31,6 +32,7 @@ export interface Finding {
   severity: Severity;
   title: string;
   explanation: string;
+  category?: Specialist | null;
 }
 
 export interface VerificationEvidence {
@@ -50,6 +52,8 @@ export interface ToolCall {
   status: 'pending' | 'completed';
   result?: string | null;
   evidence?: VerificationEvidence | null;
+  // Null for shared context retrieval that runs before the specialists.
+  specialist?: Specialist | null;
 }
 
 export interface Review {
@@ -57,4 +61,5 @@ export interface Review {
   pull_request: PullRequest;
   findings: Finding[];
   tool_calls?: ToolCall[];
+  specialists?: Specialist[];
 }

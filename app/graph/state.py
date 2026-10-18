@@ -1,3 +1,4 @@
+import operator
 from typing import Annotated, TypedDict
 
 from langchain_core.messages import AnyMessage
@@ -8,18 +9,19 @@ from app.schemas.ai_review import ReviewResult
 from app.schemas.context import ContextRequest
 from app.schemas.ai_review import ReviewFinding
 from app.schemas.hypothesis import BugHypothesis, EvidenceEvaluation, VerificationEvidence
+from app.schemas.specialist import Specialist
 from app.schemas.tool_call import ToolCallRecord
 
 
-class ReviewState(TypedDict, total=False):
+class SpecialistState(TypedDict, total=False):
+    """Private to one specialist agent; parallel specialists never share it."""
     pull_request: PullRequestData
-    diff: str
-    changed_files: list[str]
-
+    relevant_context: list[str]
     tree_evidence: VerificationEvidence | None
     tree_context: str
-    context_request: ContextRequest
-    relevant_context: list[str]
+
+    specialist: Specialist
+    tool_budget: int
     hypotheses: list[BugHypothesis]
     hypothesis_index: int
     current_hypothesis: BugHypothesis
@@ -32,5 +34,24 @@ class ReviewState(TypedDict, total=False):
     messages: Annotated[list[AnyMessage], add_messages]
     verification_tool_calls: int
     verification_rounds: int
+
+
+class ReviewState(TypedDict, total=False):
+    pull_request: PullRequestData
+    diff: str
+    changed_files: list[str]
+
+    tree_evidence: VerificationEvidence | None
+    tree_context: str
+    context_request: ContextRequest
+    relevant_context: list[str]
+    specialists: list[Specialist]
+    # Parallel specialists each append their final state; the reducer merges them.
+    specialist_runs: Annotated[list[SpecialistState], operator.add]
+
+    findings: list[ReviewFinding]
+    evaluations: list[EvidenceEvaluation]
+    tool_calls: int
+    tool_records: list[ToolCallRecord]
 
     review: ReviewResult

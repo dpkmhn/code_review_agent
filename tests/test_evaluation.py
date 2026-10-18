@@ -132,19 +132,19 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
                                 explanation="An empty list triggers division by zero.")
 
         class ScriptedReviewer(OfflineReviewer):
-            async def form_hypotheses(self, pull_request, relevant_context):
+            async def form_hypotheses(self, pull_request, relevant_context, specialist):
                 return HypothesisResult(hypotheses=[BugHypothesis(
                     description=finding.explanation, file=finding.file, line=2,
                     confidence="high", verification_plan=[])])
 
-            async def request_verification_tools(self, messages, tools):
+            async def request_verification_tools(self, messages, tools, specialist):
                 if any(isinstance(message, ToolMessage) for message in messages):
                     return AIMessage(content="Enough evidence")
                 return AIMessage(content="", tool_calls=[{
                     "id": "read-head", "name": "read_file",
                     "args": {"path": "subject.py", "revision": "head"}}])
 
-            async def evaluate_evidence(self, hypothesis, evidence):
+            async def evaluate_evidence(self, hypothesis, evidence, specialist):
                 # Evidence order: diff, repository tree, then tool results.
                 if ([item.source for item in evidence] != ["diff", "list_tree", "read_file"]
                         or evidence[2].content != case.head["subject.py"]):
