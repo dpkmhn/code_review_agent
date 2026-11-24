@@ -11,6 +11,7 @@ from app.graph.state import ReviewState
 from app.schemas.context import ContextRequest
 from app.schemas.hypothesis import HypothesisResult
 from app.schemas.ai_review import ReviewResult
+from app.schemas.specialist import SpecialistSelection
 from app.services.context_service import ContextService
 from app.services.llm_review_service import LLMReviewService
 from app.tools.verification_tools import build_verification_tools
@@ -27,7 +28,10 @@ class OfflineReviewer:
     async def review_pull_request(self, pull_request, relevant_context=None):
         return ReviewResult(findings=[])
 
-    async def form_hypotheses(self, pull_request, relevant_context):
+    async def select_specialists(self, pull_request):
+        return SpecialistSelection(specialists=["correctness"], reason="Offline wiring check")
+
+    async def form_hypotheses(self, pull_request, relevant_context, specialist="correctness"):
         return HypothesisResult(hypotheses=[])
 
 

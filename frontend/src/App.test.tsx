@@ -60,6 +60,28 @@ describe('Review workspace', () => {
     expect(document.querySelector('script')).toBeNull();
   });
 
+  it('shows which specialists ran, filters by agent and groups tool evidence', async () => {
+    const reviewed: Review = { ...result, specialists: ['correctness', 'security'], tool_calls: [
+      { call_id: 'context-1', name: 'search_code', status: 'completed', arguments: { query: 'pay' } },
+      { call_id: 'security-verification-1', name: 'read_file', status: 'completed', arguments: { path: 'auth.py' }, specialist: 'security' },
+    ], findings: [
+      { severity: 'high', title: 'Missing validation', file: 'pay.py', line: 8, explanation: 'A missing value reaches the payment handler.', category: 'correctness' },
+      { severity: 'critical', title: 'SQL injection', file: 'auth.py', line: 3, explanation: 'Username is interpolated into the query.', category: 'security' },
+    ] };
+    vi.stubGlobal('fetch', withHealth(vi.fn().mockResolvedValueOnce(reply(reviewed))));
+    const user = userEvent.setup(); render(<App />); await submit(user);
+    await screen.findByText('Supervisor dispatched 2 of 3 · one shared evidence judge');
+    expect(screen.getByRole('button', { name: /performance.*skipped/i })).toHaveProperty('disabled', true);
+    await user.click(screen.getByRole('button', { name: /security.*1 finding/i }));
+    expect(screen.queryByText('Missing validation')).toBeNull();
+    expect(screen.getByText('SQL injection')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Show all' }));
+    expect(screen.getByText('Missing validation')).toBeTruthy();
+    await user.click(screen.getByText('Tool evidence (2 calls)'));
+    expect(screen.getByText('Shared context')).toBeTruthy();
+    expect(screen.getByText('security agent')).toBeTruthy();
+  });
+
   it('surfaces API and network errors without a false completed review', async () => {
     const fetch = vi.fn().mockResolvedValueOnce(reply({ detail: 'GitHub API request failed' }, 502))
       .mockRejectedValueOnce(new TypeError('network'));

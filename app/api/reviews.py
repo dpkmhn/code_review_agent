@@ -56,5 +56,6 @@ async def create_review(request: ReviewRequest) -> ReviewResponse:
         pull_request=pull_request,
         findings=result["review"].findings,
         tool_calls=result.get("tool_records", []),
+        specialists=result.get("specialists", []),
     )
 

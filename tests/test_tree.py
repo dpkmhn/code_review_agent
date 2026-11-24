@@ -76,7 +76,7 @@ class TreeTests(unittest.IsolatedAsyncioTestCase):
                                    confidence="high", verification_plan=[])
         tree = tree_evidence({"paths": ["frontend/src/main.tsx"], "truncated": False}, "head")
         state = {"pull_request": self.pull_request(), "hypotheses": [hypothesis],
-                 "hypothesis_index": 0, "relevant_context": [], "tool_calls": 0,
+                 "hypothesis_index": 0, "relevant_context": [], "tool_calls": 0, "tool_budget": 30,
                  "tree_evidence": tree}
         result = await nodes.select_hypothesis_node(state)
         self.assertEqual([item.source for item in result["evidence"]], ["diff", "list_tree"])

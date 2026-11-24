@@ -2,7 +2,8 @@
 
 An agentic, evidence-driven reviewer for GitHub pull requests.
 
-- Forms hypotheses about potential defects in the diff
+- Routes each change to correctness, security and performance specialist agents
+- Each specialist forms hypotheses about potential defects in the diff
 - Verifies each one against the repository at the exact reviewed revision
 - Reports only findings backed by evidence
 
@@ -30,28 +31,33 @@ An agentic, evidence-driven reviewer for GitHub pull requests.
 
 ## Architecture
 
-Each review runs as a LangGraph state machine:
+Each review runs as a multi-agent LangGraph system. A supervisor routes the change to
+specialist reviewer agents, which run in parallel as separate subgraphs with their own
+prompts, state and tool budgets. Every claim passes through one shared evidence judge:
 
 ```text
-Fetch PR → Analyse diff → Load repository tree → Retrieve context → Form hypotheses
+Fetch PR → Analyse diff → Load repository tree → Retrieve context → Supervisor
                                                                         │
-                         ┌──────────────────────────────────────────────┘
-                         ▼
-        For each hypothesis (maximum 5):
-          Reviewer ⇄ Tools (read_file, search_code, find_references,
-                            run_test, run_static_analysis)
-                         ▼
-               Evaluate evidence → confirm or discard
-                         ▼
-                  Generate review
+                 ┌──────────────────────────┬───────────────────────────┤
+                 ▼                          ▼                           ▼
+          Correctness agent           Security agent            Performance agent
+          (always runs)               (if relevant)             (if relevant)
+                 │  For each hypothesis (maximum 5 per agent):
+                 │    Reviewer ⇄ Tools (read_file, search_code, find_references,
+                 │                      run_test, run_static_analysis)
+                 │    Shared judge: evaluate evidence → confirm or discard
+                 └──────────────────────────┴───────────────────────────┘
+                                            ▼
+                        Merge findings (one per location) → Generate review
 ```
 
 ## Key capabilities
 
-- **Hypothesis-driven:** up to five candidate defects, each investigated with tools
+- **Multi-agent:** a supervisor fans out to correctness, security and performance specialists
+- **Hypothesis-driven:** up to five candidate defects per specialist, each investigated with tools
 - **Evidence-gated:** only findings with valid citations reach the report
 - **Revision-pinned:** inspection and links use the PR's exact commit SHA
-- **Bounded:** 3 model turns and 6 tool calls per hypothesis, 30 tool calls per review
+- **Bounded:** 3 model turns and 6 tool calls per hypothesis, 30 tool calls per review shared across specialists
 - **Sandboxed (optional):** pytest and Ruff in locked-down, network-less Docker containers
 - **Transparent:** the UI shows each finding with its GitHub links and tool evidence
 - **Measurable:** evaluation harness comparing three review architectures
@@ -144,8 +150,11 @@ curl -s http://127.0.0.1:8001/api/v1/reviews \
 
 - The response contains:
   - `pull_request`: PR metadata
-  - `findings`: confirmed issues, each with `file`, `line`, `severity`, `title` and `explanation`
-  - `tool_calls`: the evidence behind the findings
+  - `findings`: confirmed issues, each with `file`, `line`, `severity`, `title`, `explanation`
+    and `category` (the specialist that reported it)
+  - `tool_calls`: the evidence behind the findings, each tagged with its `specialist`
+    (`null` for shared context retrieval)
+  - `specialists`: the specialist agents the supervisor ran
 
 | Status | Meaning |
 | --- | --- |
@@ -180,7 +189,7 @@ three review architectures:
 | --- | --- |
 | `diff_only` | Structured review of the diff alone |
 | `context` | Context retrieval followed by a structured review |
-| `verification` | Full hypothesis and evidence graph |
+| `verification` | Full multi-agent hypothesis and evidence graph |
 
 ```bash
 # Offline wiring check (no external requests)

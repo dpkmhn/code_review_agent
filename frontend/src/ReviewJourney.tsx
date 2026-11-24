@@ -2,7 +2,7 @@
 export default function ReviewJourney() {
   return <figure className="review-journey">
     <figcaption><span>THE GIT FLOW</span><span className="journey-caption">Where the agent steps in</span></figcaption>
-    <svg viewBox="0 0 520 270" role="img" aria-label="Git flow illustration: a feature branch leaves main, gathers commits, opens a pull request that the agent reviews, then merges back into main. This is an overview, not live progress.">
+    <svg viewBox="0 0 520 270" role="img" aria-label="Git flow illustration: a feature branch leaves main, gathers commits, opens a pull request that correctness, security and performance agents review, then merges back into main. This is an overview, not live progress.">
       <defs>
         <pattern id="journey-grid" width="20" height="20" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r=".7" fill="#667498" opacity=".2" /></pattern>
         <linearGradient id="journey-pr" x1="0" y1="0" x2="1" y2="1"><stop stopColor="#7c53d9" /><stop offset="1" stopColor="#b06ad8" /></linearGradient>
@@ -25,10 +25,10 @@ export default function ReviewJourney() {
         <text x="360" y="200" textAnchor="middle">Pull request</text>
       </g>
       <g className="flow-agents">
-        {([['#f2a46b', 334, 'bug'], ['#9aa8ff', 360, 'ctx'], ['#f08bb0', 386, 'sec']] as const).map(([color, x, key], index) =>
+        {([['#f2a46b', 334, 'correctness'], ['#f08bb0', 360, 'security'], ['#9aa8ff', 386, 'performance']] as const).map(([color, x, key], index) =>
           <circle key={key} cx={x} cy="236" r="7" fill="none" stroke={color} strokeWidth="1.6" style={{ animationDelay: `${index * 0.4}s` }} />)}
       </g>
-      <text x="360" y="262" textAnchor="middle" className="journey-note">The agent reviews here, before the merge.</text>
+      <text x="360" y="262" textAnchor="middle" className="journey-note">Specialist agents review here, before the merge.</text>
       <circle className="flow-pulse" r="4" cx="0" cy="0"><animateMotion dur="6s" repeatCount="indefinite" path="M110 64 C142 64 144 124 176 124 H384 C416 124 418 64 450 64" /></circle>
     </svg>
     <div className="journey-legend" aria-hidden="true"><span><i className="main" />main branch</span><span><i className="feature" />feature branch</span><span><i className="pr" />pull request</span></div>

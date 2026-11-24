@@ -35,7 +35,7 @@ All modes use the existing GPT-6 Luna services and prompts:
 | --- | --- |
 | `diff_only` | Structured review using only the PR diff |
 | `context` | LangGraph context analysis/retrieval, then structured review |
-| `verification` | Full hypothesis/evidence graph using local repository tools |
+| `verification` | Full multi-agent hypothesis/evidence graph (supervisor and specialists) using local repository tools |
 
 Search uses literal, case-insensitive text on the base snapshot rather than
 GitHub's query language. Reads use exact base/head hashes. Verification exposes
